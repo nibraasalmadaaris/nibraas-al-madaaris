@@ -1054,12 +1054,14 @@ function InvoicesScreen({ config, tr }) {
 function FinanceScreen({ config }) {
   const [txns, setTxns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [view, setView] = useState("list");
   const [form, setForm] = useState({ type: "Lacag La Bixiyay", date: todayISO() });
 
   useEffect(() => {
     loadArr("finance-data").then((arr) => {
-      setTxns(arr);
+      setTxns(Array.isArray(arr) ? arr : []);
       setLoading(false);
     });
   }, []);
@@ -1069,28 +1071,92 @@ function FinanceScreen({ config }) {
     await saveArr("finance-data", next);
   };
 
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!form.studentName || !form.amount) return;
-    const newItem = { ...form, id: Date.now() };
-    await persist([newItem, ...txns]);
+  const resetForm = () => {
     setForm({ type: "Lacag La Bixiyay", date: todayISO() });
-    setView("list");
+    setEditingId(null);
   };
 
-  const collected = txns.filter((t) => t.type === "Lacag La Bixiyay").reduce((s, t) => s + Number(t.amount || 0), 0);
-  const due = txns.filter((t) => t.type === "Deyn").reduce((s, t) => s + Number(t.amount || 0), 0);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving || !String(form.studentName || "").trim() || !form.amount) return;
+
+    setSaving(true);
+    try {
+      const clean = {
+        ...form,
+        studentName: String(form.studentName).trim(),
+        amount: Number(form.amount),
+      };
+
+      if (editingId !== null) {
+        const next = txns.map((t) =>
+          t.id === editingId ? { ...t, ...clean, id: editingId } : t
+        );
+        await persist(next);
+      } else {
+        const newItem = { ...clean, id: Date.now() };
+        await persist([newItem, ...txns]);
+      }
+
+      resetForm();
+      setView("list");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const editTxn = (txn) => {
+    setForm({
+      studentName: txn.studentName || "",
+      amount: txn.amount ?? "",
+      type: txn.type || "Lacag La Bixiyay",
+      date: txn.date || todayISO(),
+      note: txn.note || "",
+    });
+    setEditingId(txn.id);
+    setView("form");
+  };
+
+  const deleteTxn = async (id) => {
+    if (saving) return;
+    if (!window.confirm("Ma hubtaa inaad tirtirayso diiwaankan?")) return;
+
+    setSaving(true);
+    try {
+      await persist(txns.filter((t) => t.id !== id));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const collected = txns
+    .filter((t) => t.type === "Lacag La Bixiyay")
+    .reduce((s, t) => s + Number(t.amount || 0), 0);
+
+  const due = txns
+    .filter((t) => t.type === "Deyn")
+    .reduce((s, t) => s + Number(t.amount || 0), 0);
 
   if (view === "form") {
     return (
       <div className="max-w-xl mx-auto">
-        <button onClick={() => setView("list")} className="flex items-center gap-1.5 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}>
+        <button
+          onClick={() => {
+            resetForm();
+            setView("list");
+          }}
+          className="flex items-center gap-1.5 text-sm mb-4 font-semibold"
+          style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}
+        >
           <ArrowLeft size={16} /> Dib u noqo
         </button>
+
         <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
-          Diiwaan Gelin Lacag
+          {editingId !== null ? "Wax ka beddel Diiwaanka Lacagta" : "Diiwaan Gelin Lacag"}
         </h2>
+
         <SignatureChain className="mb-5" />
+
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
@@ -1103,6 +1169,7 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
@@ -1118,6 +1185,7 @@ function FinanceScreen({ config }) {
                 <option>Deyn</option>
               </select>
             </div>
+
             <div>
               <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
                 Qadarka *
@@ -1131,6 +1199,7 @@ function FinanceScreen({ config }) {
               />
             </div>
           </div>
+
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Taariikhda
@@ -1143,6 +1212,7 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
+
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Faallo
@@ -1154,8 +1224,14 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
-          <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}>
-            Kaydi
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-lg py-3 font-semibold text-sm disabled:opacity-60"
+            style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}
+          >
+            {saving ? "Waa la kaydinayaa..." : editingId !== null ? "Cusboonaysii" : "Kaydi"}
           </button>
         </form>
       </div>
@@ -1168,14 +1244,19 @@ function FinanceScreen({ config }) {
         <h2 className="text-xl font-semibold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
           Maaliyadda
         </h2>
+
         <button
-          onClick={() => setView("form")}
+          onClick={() => {
+            resetForm();
+            setView("form");
+          }}
           className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold"
           style={{ backgroundColor: COLORS.gold, color: COLORS.tealDeep, fontFamily: BODY_FONT }}
         >
           <Plus size={16} /> Ku dar
         </button>
       </div>
+
       <SignatureChain className="mb-4" />
 
       <div className="grid grid-cols-2 gap-3 mb-5">
@@ -1192,7 +1273,11 @@ function FinanceScreen({ config }) {
       ) : (
         <div className="space-y-2">
           {txns.map((t) => (
-            <div key={t.id} className="flex items-center justify-between rounded-xl border px-4 py-3" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
+            <div
+              key={t.id}
+              className="flex items-center justify-between rounded-xl border px-4 py-3"
+              style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}
+            >
               <div>
                 <p className="text-sm font-semibold" style={{ color: COLORS.ink, fontFamily: BODY_FONT }}>
                   {t.studentName}
@@ -1201,13 +1286,38 @@ function FinanceScreen({ config }) {
                   {fmtDate(t.date)} {t.note ? `· ${t.note}` : ""}
                 </p>
               </div>
-              <p
-                className="text-sm font-bold"
-                style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}
-              >
-                {t.type === "Deyn" ? "-" : "+"}
-                {fmtMoney(t.amount, config.currency)}
-              </p>
+
+              <div className="flex items-center gap-1.5">
+                <p
+                  className="text-sm font-bold mr-1"
+                  style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}
+                >
+                  {t.type === "Deyn" ? "-" : "+"}
+                  {fmtMoney(t.amount, config.currency)}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => editTxn(t)}
+                  className="p-2 rounded-lg"
+                  style={{ color: COLORS.tealLight }}
+                  aria-label="Wax ka beddel"
+                  title="Wax ka beddel"
+                >
+                  <Pencil size={15} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => deleteTxn(t.id)}
+                  className="p-2 rounded-lg"
+                  style={{ color: COLORS.brick }}
+                  aria-label="Tirtir"
+                  title="Tirtir"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -4945,10 +5055,7 @@ useEffect(() => {
 }, [session, tenantReady]);
 // 1. Kaydinta xogta Ardayda
 const [students, setStudents] = useState([]);
-const [txns, setTxns] = useState([]);
-
 const [studentsLoaded, setStudentsLoaded] = useState(false);
-const [financeLoaded, setFinanceLoaded] = useState(false);
 
 // Supabase ka soo akhri marka app-ku furmo
 useEffect(() => {
@@ -4959,18 +5066,15 @@ useEffect(() => {
     setStudentsLoaded(true);
   });
 
-  loadArr("finance-data").then((data) => {
-    setTxns(Array.isArray(data) ? data : []);
-    setFinanceLoaded(true);
-  });
 }, [session, tenantReady]);
 
-// Maaliyadda kaydi
+// Ardayda kaydi
 useEffect(() => {
-  if (session?.user?.id && tenantReady && financeLoaded) {
-    saveArr("finance-data", txns);
+  if (session?.user?.id && tenantReady && studentsLoaded) {
+    saveArr("students-data", students);
   }
-}, [txns, financeLoaded, session, tenantReady]);
+}, [students, studentsLoaded, session, tenantReady]);
+
   useBrandFonts();
   useEffect(() => {
     if (document.getElementById("nibraas-pwa-meta")) return;
