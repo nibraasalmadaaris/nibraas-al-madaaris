@@ -4965,13 +4965,6 @@ useEffect(() => {
   });
 }, [session, tenantReady]);
 
-// Ardayda kaydi
-useEffect(() => {
-  if (session?.user?.id && tenantReady && studentsLoaded) {
-    saveArr("students-data", students);
-  }
-}, [students, studentsLoaded, session, tenantReady]);
-
 // Maaliyadda kaydi
 useEffect(() => {
   if (session?.user?.id && tenantReady && financeLoaded) {
