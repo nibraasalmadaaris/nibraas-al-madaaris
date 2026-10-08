@@ -247,65 +247,65 @@ function UsersScreen() {
     }
 
     setSaving(true);
-    const { data: current } = await supabase.auth.getSession();
-    const adminSession = current.session;
 
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    try {
+      if (!CURRENT_TENANT_ID) {
+        setError("Tenant-ka NIBRAAS lama xaqiijin.");
+        return;
+      }
 
-    if (signUpError) {
-      setError(signUpError.message || "User-ka lama abuuri karin.");
-      setSaving(false);
-      return;
-    }
+      // User-ka waxaa lagu abuuraa Edge Function server-side si secret key-ga
+      // uusan waligiis ugu soo bixin browser-ka. Function-ku wuxuu sidoo kale
+      // si ammaan ah u hubiyaa in qofka hadda galay uu yahay Admin/Maamule.
+      const { data, error: functionError } = await supabase.functions.invoke(
+        "nibraas-admin-create-user",
+        {
+          body: {
+            tenant_id: CURRENT_TENANT_ID,
+            name,
+            email,
+            password,
+            role: form.role,
+          },
+        }
+      );
 
-    // Haddii Supabase uu si toos ah u geliyo user-ka cusub, dib ugu celi admin-ka.
-    if (adminSession && data.session?.user?.id !== adminSession.user?.id) {
-      await supabase.auth.setSession({
-        access_token: adminSession.access_token,
-        refresh_token: adminSession.refresh_token,
-      });
-    }
+      if (functionError) {
+        let detail = functionError.message || "User-ka lama abuuri karin.";
+        try {
+          const body = await functionError.context?.json?.();
+          if (body?.error) detail = body.error;
+        } catch {}
+        setError(detail);
+        return;
+      }
 
-    if (!data.user?.id || !CURRENT_TENANT_ID) {
-      setError("User-ka waa la abuuray, laakiin tenant-ka lama xaqiijin.");
-      setSaving(false);
-      return;
-    }
+      if (!data?.user_id) {
+        setError("User-ka lama xaqiijin; Edge Function-ku ID ma soo celin.");
+        return;
+      }
 
-    const { error: membershipError } = await supabase
-      .from("nibraas_memberships")
-      .insert({
-        tenant_id: CURRENT_TENANT_ID,
-        user_id: data.user.id,
+      const profile = {
+        id: crypto.randomUUID(),
+        authUserId: data.user_id,
+        name,
+        email,
         role: form.role,
-      });
+        createdAt: new Date().toISOString(),
+      };
 
-    if (membershipError) {
-      setError(membershipError.message || "User-ka tenant-ka laguma darin.");
+      setUsers((prev) => [...prev, profile]);
+      setForm({ name: "", email: "", password: "", role: "Macalin" });
+      setMessage(
+        data.existing
+          ? "User-kii hore ayuu u jiray; hadda NIBRAAS ayaa lagu xidhay role-ka iyo tenant-ka."
+          : "User-ka waa la abuuray, waa la xaqiijiyey, waxaana lagu xidhay NIBRAAS."
+      );
+    } catch (err) {
+      setError(err?.message || "Wax khalad ah ayaa dhacay markii user-ka la abuurayay.");
+    } finally {
       setSaving(false);
-      return;
     }
-
-    const profile = {
-      id: crypto.randomUUID(),
-      authUserId: data.user?.id || null,
-      name,
-      email,
-      role: form.role,
-      createdAt: new Date().toISOString(),
-    };
-
-    setUsers((prev) => [...prev, profile]);
-    setForm({ name: "", email: "", password: "", role: "Macalin" });
-    setMessage(
-      data.user?.id
-        ? "User-ka waa la abuuray oo Supabase Auth ayaa ku xiran."
-        : "User-ka waa la sameeyay; email-ka xaqiiji haddii Supabase uu dalbado."
-    );
-    setSaving(false);
   };
 
   const removeUser = async (user) => {
@@ -1054,14 +1054,12 @@ function InvoicesScreen({ config, tr }) {
 function FinanceScreen({ config }) {
   const [txns, setTxns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState(null);
   const [view, setView] = useState("list");
   const [form, setForm] = useState({ type: "Lacag La Bixiyay", date: todayISO() });
 
   useEffect(() => {
     loadArr("finance-data").then((arr) => {
-      setTxns(Array.isArray(arr) ? arr : []);
+      setTxns(arr);
       setLoading(false);
     });
   }, []);
@@ -1071,92 +1069,28 @@ function FinanceScreen({ config }) {
     await saveArr("finance-data", next);
   };
 
-  const resetForm = () => {
-    setForm({ type: "Lacag La Bixiyay", date: todayISO() });
-    setEditingId(null);
-  };
-
   const submit = async (e) => {
     e.preventDefault();
-    if (saving || !String(form.studentName || "").trim() || !form.amount) return;
-
-    setSaving(true);
-    try {
-      const clean = {
-        ...form,
-        studentName: String(form.studentName).trim(),
-        amount: Number(form.amount),
-      };
-
-      if (editingId !== null) {
-        const next = txns.map((t) =>
-          t.id === editingId ? { ...t, ...clean, id: editingId } : t
-        );
-        await persist(next);
-      } else {
-        const newItem = { ...clean, id: Date.now() };
-        await persist([newItem, ...txns]);
-      }
-
-      resetForm();
-      setView("list");
-    } finally {
-      setSaving(false);
-    }
+    if (!form.studentName || !form.amount) return;
+    const newItem = { ...form, id: Date.now() };
+    await persist([newItem, ...txns]);
+    setForm({ type: "Lacag La Bixiyay", date: todayISO() });
+    setView("list");
   };
 
-  const editTxn = (txn) => {
-    setForm({
-      studentName: txn.studentName || "",
-      amount: txn.amount ?? "",
-      type: txn.type || "Lacag La Bixiyay",
-      date: txn.date || todayISO(),
-      note: txn.note || "",
-    });
-    setEditingId(txn.id);
-    setView("form");
-  };
-
-  const deleteTxn = async (id) => {
-    if (saving) return;
-    if (!window.confirm("Ma hubtaa inaad tirtirayso diiwaankan?")) return;
-
-    setSaving(true);
-    try {
-      await persist(txns.filter((t) => t.id !== id));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const collected = txns
-    .filter((t) => t.type === "Lacag La Bixiyay")
-    .reduce((s, t) => s + Number(t.amount || 0), 0);
-
-  const due = txns
-    .filter((t) => t.type === "Deyn")
-    .reduce((s, t) => s + Number(t.amount || 0), 0);
+  const collected = txns.filter((t) => t.type === "Lacag La Bixiyay").reduce((s, t) => s + Number(t.amount || 0), 0);
+  const due = txns.filter((t) => t.type === "Deyn").reduce((s, t) => s + Number(t.amount || 0), 0);
 
   if (view === "form") {
     return (
       <div className="max-w-xl mx-auto">
-        <button
-          onClick={() => {
-            resetForm();
-            setView("list");
-          }}
-          className="flex items-center gap-1.5 text-sm mb-4 font-semibold"
-          style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}
-        >
+        <button onClick={() => setView("list")} className="flex items-center gap-1.5 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}>
           <ArrowLeft size={16} /> Dib u noqo
         </button>
-
         <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
-          {editingId !== null ? "Wax ka beddel Diiwaanka Lacagta" : "Diiwaan Gelin Lacag"}
+          Diiwaan Gelin Lacag
         </h2>
-
         <SignatureChain className="mb-5" />
-
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
@@ -1169,7 +1103,6 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
@@ -1185,7 +1118,6 @@ function FinanceScreen({ config }) {
                 <option>Deyn</option>
               </select>
             </div>
-
             <div>
               <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
                 Qadarka *
@@ -1199,7 +1131,6 @@ function FinanceScreen({ config }) {
               />
             </div>
           </div>
-
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Taariikhda
@@ -1212,7 +1143,6 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
-
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Faallo
@@ -1224,14 +1154,8 @@ function FinanceScreen({ config }) {
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
             />
           </div>
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="w-full rounded-lg py-3 font-semibold text-sm disabled:opacity-60"
-            style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}
-          >
-            {saving ? "Waa la kaydinayaa..." : editingId !== null ? "Cusboonaysii" : "Kaydi"}
+          <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}>
+            Kaydi
           </button>
         </form>
       </div>
@@ -1244,19 +1168,14 @@ function FinanceScreen({ config }) {
         <h2 className="text-xl font-semibold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
           Maaliyadda
         </h2>
-
         <button
-          onClick={() => {
-            resetForm();
-            setView("form");
-          }}
+          onClick={() => setView("form")}
           className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold"
           style={{ backgroundColor: COLORS.gold, color: COLORS.tealDeep, fontFamily: BODY_FONT }}
         >
           <Plus size={16} /> Ku dar
         </button>
       </div>
-
       <SignatureChain className="mb-4" />
 
       <div className="grid grid-cols-2 gap-3 mb-5">
@@ -1273,11 +1192,7 @@ function FinanceScreen({ config }) {
       ) : (
         <div className="space-y-2">
           {txns.map((t) => (
-            <div
-              key={t.id}
-              className="flex items-center justify-between rounded-xl border px-4 py-3"
-              style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}
-            >
+            <div key={t.id} className="flex items-center justify-between rounded-xl border px-4 py-3" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
               <div>
                 <p className="text-sm font-semibold" style={{ color: COLORS.ink, fontFamily: BODY_FONT }}>
                   {t.studentName}
@@ -1286,38 +1201,13 @@ function FinanceScreen({ config }) {
                   {fmtDate(t.date)} {t.note ? `· ${t.note}` : ""}
                 </p>
               </div>
-
-              <div className="flex items-center gap-1.5">
-                <p
-                  className="text-sm font-bold mr-1"
-                  style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}
-                >
-                  {t.type === "Deyn" ? "-" : "+"}
-                  {fmtMoney(t.amount, config.currency)}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => editTxn(t)}
-                  className="p-2 rounded-lg"
-                  style={{ color: COLORS.tealLight }}
-                  aria-label="Wax ka beddel"
-                  title="Wax ka beddel"
-                >
-                  <Pencil size={15} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => deleteTxn(t.id)}
-                  className="p-2 rounded-lg"
-                  style={{ color: COLORS.brick }}
-                  aria-label="Tirtir"
-                  title="Tirtir"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
+              <p
+                className="text-sm font-bold"
+                style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}
+              >
+                {t.type === "Deyn" ? "-" : "+"}
+                {fmtMoney(t.amount, config.currency)}
+              </p>
             </div>
           ))}
         </div>
@@ -5055,7 +4945,10 @@ useEffect(() => {
 }, [session, tenantReady]);
 // 1. Kaydinta xogta Ardayda
 const [students, setStudents] = useState([]);
+const [txns, setTxns] = useState([]);
+
 const [studentsLoaded, setStudentsLoaded] = useState(false);
+const [financeLoaded, setFinanceLoaded] = useState(false);
 
 // Supabase ka soo akhri marka app-ku furmo
 useEffect(() => {
@@ -5066,6 +4959,10 @@ useEffect(() => {
     setStudentsLoaded(true);
   });
 
+  loadArr("finance-data").then((data) => {
+    setTxns(Array.isArray(data) ? data : []);
+    setFinanceLoaded(true);
+  });
 }, [session, tenantReady]);
 
 // Ardayda kaydi
@@ -5075,6 +4972,12 @@ useEffect(() => {
   }
 }, [students, studentsLoaded, session, tenantReady]);
 
+// Maaliyadda kaydi
+useEffect(() => {
+  if (session?.user?.id && tenantReady && financeLoaded) {
+    saveArr("finance-data", txns);
+  }
+}, [txns, financeLoaded, session, tenantReady]);
   useBrandFonts();
   useEffect(() => {
     if (document.getElementById("nibraas-pwa-meta")) return;
