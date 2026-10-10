@@ -148,6 +148,43 @@ async function loadArr(key) {
   return loadObj(key, []);
 }
 
+async function loadArrSafe(key) {
+  const physicalKey = physicalStorageKey(key);
+
+  if (!physicalKey || !CURRENT_TENANT_ID) {
+    return {
+      ok: false,
+      data: null,
+      error: new Error("Tenant storage is not ready"),
+    };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("app_storage")
+      .select("value")
+      .eq("tenant_id", CURRENT_TENANT_ID)
+      .eq("key", physicalKey)
+      .maybeSingle();
+
+    if (error) {
+      return { ok: false, data: null, error };
+    }
+
+    return {
+      ok: true,
+      data: data ? data.value : [],
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      error,
+    };
+  }
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -4952,25 +4989,58 @@ const [financeLoaded, setFinanceLoaded] = useState(false);
 
 // Supabase ka soo akhri marka app-ku furmo
 useEffect(() => {
-  if (!session?.user?.id || !tenantReady) return;
+  if (!session?.user?.id || !tenantReady) {
+    setStudentsLoaded(false);
+    setFinanceLoaded(false);
+    return;
+  }
 
-  loadArr("students-data").then((data) => {
-    setStudents(Array.isArray(data) ? data : []);
+  let cancelled = false;
+
+  setStudentsLoaded(false);
+
+  loadArrSafe("students-data").then((result) => {
+    if (cancelled) return;
+
+    if (!result.ok) {
+      console.error(
+        "Students load failed. Saving is paused to protect existing data:",
+        result.error
+      );
+
+      setStudentsLoaded(false);
+      return;
+    }
+
+    setStudents(
+      Array.isArray(result.data) ? result.data : []
+    );
+
     setStudentsLoaded(true);
   });
 
   loadArr("finance-data").then((data) => {
+    if (cancelled) return;
+
     setTxns(Array.isArray(data) ? data : []);
     setFinanceLoaded(true);
   });
-}, [session, tenantReady]);
 
-// Ardayda kaydi
+  return () => {
+    cancelled = true;
+  };
+}, [session?.user?.id, tenantReady]);
+
+// Ardayda kaydi kaliya marka xogta si guul leh loo soo akhriyey
 useEffect(() => {
-  if (session?.user?.id && tenantReady && studentsLoaded) {
+  if (
+    session?.user?.id &&
+    tenantReady &&
+    studentsLoaded
+  ) {
     saveArr("students-data", students);
   }
-}, [students, studentsLoaded, session, tenantReady]);
+}, [students, studentsLoaded, session?.user?.id, tenantReady]);
 
 // Maaliyadda kaydi
 useEffect(() => {
