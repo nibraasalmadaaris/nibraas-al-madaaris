@@ -2535,49 +2535,86 @@ const restoreBackup = async (event) => {
   event.target.value = "";
   if (!file) return;
 
-  const confirmed = window.confirm(
-    "Ma hubtaa inaad Restore sameyso? Xogta ku jirta backup-ka ayaa cusboonaysiin doonta xogta Isnaad."
-  );
-  if (!confirmed) return;
+  // Reject obviously unsuitable files before reading or writing anything.
+  if (!file.name.toLowerCase().endsWith(".json") || file.size <= 0 || file.size > 50 * 1024 * 1024) {
+    alert("Faylka backup-ku waa inuu noqdaa JSON sax ah oo ka yar 50 MB.");
+    return;
+  }
 
   setRestoreLoading(true);
   try {
     const text = await file.text();
-    const backup = JSON.parse(text);
-    if (backup?.app !== "Isnaad" || !Array.isArray(backup?.data)) {
-      throw new Error("Backup file aan sax ahayn.");
+    let backup;
+    try {
+      backup = JSON.parse(text);
+    } catch {
+      throw new Error("Faylku ma aha JSON sax ah.");
     }
 
-    for (const row of backup.data) {
-      if (!row?.key) continue;
-      const logicalKey = logicalStorageKey(row.key);
+    if (backup?.app !== "Isnaad" || !Array.isArray(backup?.data)) {
+      throw new Error("Backup file aan sax ahayn ama aan Isnaad ahayn.");
+    }
+    if (backup.data.length === 0) {
+      throw new Error("Backup-ku wax xog ah kuma jiro; waxba lama beddelin.");
+    }
+    if (!CURRENT_TENANT_ID) {
+      throw new Error("Tenant-ka hadda lama aqoonsan; waxba lama beddelin.");
+    }
+
+    // Validate and prepare every row before sending any write to Supabase.
+    const now = new Date().toISOString();
+    const seenKeys = new Set();
+    const rowsToRestore = backup.data.map((row, index) => {
+      if (!row || typeof row.key !== "string" || !row.key.trim()) {
+        throw new Error(`Furaha xogta safka ${index + 1} waa khaldan yahay.`);
+      }
+      if (!Object.prototype.hasOwnProperty.call(row, "value")) {
+        throw new Error(`Xogta safka ${index + 1} qiime (value) ma leh.`);
+      }
+
+      const logicalKey = logicalStorageKey(row.key.trim());
       const branchId = isGlobalStorageKey(logicalKey)
         ? "__global__"
-        : (row.branch_id || "main");
-      const physicalKey = physicalStorageKey(logicalKey, branchId === "__global__" ? CURRENT_BRANCH_ID : branchId);
-      if (!physicalKey) continue;
+        : (typeof row.branch_id === "string" && row.branch_id.trim() ? row.branch_id : "main");
+      const physicalKey = physicalStorageKey(
+        logicalKey,
+        branchId === "__global__" ? CURRENT_BRANCH_ID : branchId
+      );
+      if (!physicalKey) {
+        throw new Error(`Furaha xogta safka ${index + 1} lama diyaarin karin.`);
+      }
+      if (seenKeys.has(physicalKey)) {
+        throw new Error(`Backup-ku wuxuu leeyahay furayaal is-dul-saaran: ${logicalKey}. Waxba lama beddelin.`);
+      }
+      seenKeys.add(physicalKey);
 
-      const { error } = await supabase
-        .from("app_storage")
-        .upsert(
-          {
-            key: physicalKey,
-            tenant_id: CURRENT_TENANT_ID,
-            branch_id: branchId,
-            value: row.value,
-            updated_at: row.updated_at || new Date().toISOString(),
-            created_at: row.created_at || new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
-      if (error) throw error;
-    }
+      return {
+        key: physicalKey,
+        tenant_id: CURRENT_TENANT_ID,
+        branch_id: branchId,
+        value: row.value,
+        updated_at: typeof row.updated_at === "string" ? row.updated_at : now,
+        created_at: typeof row.created_at === "string" ? row.created_at : now,
+      };
+    });
 
-    alert("Restore waa lagu guuleystay. NIBRAAS waa dib loo furayaa.");
+    const confirmed = window.confirm(
+      `Backup-kan wuxuu ka kooban yahay ${rowsToRestore.length} qaybood oo xog ah.\n\n` +
+      "Xogta leh furayaal isku mid ah waa la cusboonaysiin karaa. Hubi inaad haysato backup cusub ka hor intaadan sii wadin.\n\nMa sii wadeysaa?"
+    );
+    if (!confirmed) return;
+
+    // One batch request reduces the chance of a half-completed row-by-row restore.
+    const { error } = await supabase
+      .from("app_storage")
+      .upsert(rowsToRestore, { onConflict: "key" });
+    if (error) throw error;
+
+    alert(`Restore waa guuleystay: ${rowsToRestore.length} qaybood oo xog ah ayaa la diray. NIBRAAS waa dib loo furayaa.`);
     window.location.reload();
   } catch (error) {
     console.error("Restore error:", error);
-    alert("Restore-ka wuu fashilmay. Hubi backup file-ka.");
+    alert(`Restore-ku wuu fashilmay: ${error?.message || "Hubi backup file-ka iyo xiriirka Supabase."}`);
   } finally {
     setRestoreLoading(false);
   }
@@ -5543,3 +5580,4 @@ useEffect(() => {
     </div>
   );
 }
+
