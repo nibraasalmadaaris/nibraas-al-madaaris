@@ -10,8 +10,7 @@ import {
 
 /* ---------------------------------------------------------
    NIBRAAS v31 — Nidaamka Maareynta Madrasada
-   "Isnaad" = silsilada wadarta (chain of transmission) —
-   the record-keeping backbone of the school.
+   NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
 const COLORS = {
@@ -2237,7 +2236,8 @@ function ReportsScreen({ config }) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Keep the object URL alive briefly so the browser can begin the download.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const printReport = () => {
@@ -2492,15 +2492,27 @@ const [restoreLoading, setRestoreLoading] = useState(false);
 const downloadBackup = async () => {
   setBackupLoading(true);
   try {
-    const { data, error } = await supabase
-      .from("app_storage")
-      .select("key, value, updated_at, created_at, branch_id")
-      .eq("tenant_id", CURRENT_TENANT_ID);
-    if (error) throw error;
+    // Fetch in pages so larger schools are not silently truncated by the
+    // database API's per-request row limit.
+    const pageSize = 1000;
+    const data = [];
+    let from = 0;
+    while (true) {
+      const { data: page, error } = await supabase
+        .from("app_storage")
+        .select("key, value, updated_at, created_at, branch_id")
+        .eq("tenant_id", CURRENT_TENANT_ID)
+        .order("key", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      data.push(...(page || []));
+      if (!page || page.length < pageSize) break;
+      from += pageSize;
+    }
 
     // Preserve the physical storage key so tenant/branch scope is not lost in backup.
     // Restore remaps the old tenant prefix to the currently signed-in tenant.
-    const backupData = (data || []).map((row) => ({
+    const backupData = data.map((row) => ({
       key: row.key,
       value: row.value,
       updated_at: row.updated_at,
@@ -2509,10 +2521,11 @@ const downloadBackup = async () => {
     }));
 
     const backup = {
-      app: "Isnaad",
+      app: "NIBRAAS",
       version: 3,
       keyFormat: "physical",
       exportedAt: new Date().toISOString(),
+      recordCount: backupData.length,
       data: backupData,
     };
 
@@ -2520,11 +2533,12 @@ const downloadBackup = async () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `isnaad-backup-${todayISO()}.json`;
+    a.download = `nibraas-backup-${todayISO()}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Give the browser time to start the download before releasing the blob URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
     console.error("Backup error:", error);
     alert("Backup-ka lama soo dejisan.");
@@ -2553,11 +2567,14 @@ const restoreBackup = async (event) => {
       throw new Error("Faylku ma aha JSON sax ah.");
     }
 
-    if (backup?.app !== "Isnaad" || !Array.isArray(backup?.data)) {
-      throw new Error("Backup file aan sax ahayn ama aan Isnaad ahayn.");
+    if (!["NIBRAAS", "Isnaad"].includes(backup?.app) || !Array.isArray(backup?.data)) {
+      throw new Error("Backup file-ku ma aha backup sax ah oo NIBRAAS ah.");
     }
     if (backup.data.length === 0) {
       throw new Error("Backup-ku wax xog ah kuma jiro; waxba lama beddelin.");
+    }
+    if (Number.isInteger(backup.recordCount) && backup.recordCount !== backup.data.length) {
+      throw new Error("Tirada xogta backup-ka isma waafaqsana; waxba lama beddelin.");
     }
     if (!CURRENT_TENANT_ID) {
       throw new Error("Tenant-ka hadda lama aqoonsan; waxba lama beddelin.");
@@ -2851,7 +2868,7 @@ const restoreBackup = async (event) => {
       fontFamily: BODY_FONT,
     }}
   >
-    Soo dejiso nuqul dhammaan xogta Isnaad ah ama
+    Soo dejiso nuqul dhammaan xogta NIBRAAS ah ama
     dib ugu soo celi backup hore.
   </p>
 
