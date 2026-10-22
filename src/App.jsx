@@ -2565,8 +2565,37 @@ const restoreBackup = async (event) => {
 
     const isPhysicalFormat = backup?.keyFormat === "physical";
     const now = new Date().toISOString();
+
+    // Older backups may contain empty legacy keys in the form tenant:logicalKey.
+    // Skip one only when a correctly scoped key for the same tenant and logical key
+    // is also present, so no non-empty or unmatched data is silently discarded.
+    const restoreSourceRows = backup.data
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => {
+        if (!isPhysicalFormat || typeof row?.key !== "string") return true;
+        const rawKey = row.key.trim();
+        const firstColon = rawKey.indexOf(":");
+        const secondColon = firstColon >= 0 ? rawKey.indexOf(":", firstColon + 1) : -1;
+        const isLegacyTwoPartKey = firstColon > 0 && secondColon < 0 && firstColon < rawKey.length - 1;
+        if (!isLegacyTwoPartKey || !Array.isArray(row.value) || row.value.length !== 0) return true;
+        const tenantPrefix = rawKey.slice(0, firstColon);
+        const legacyLogicalKey = rawKey.slice(firstColon + 1);
+        const hasScopedReplacement = backup.data.some((candidate) => {
+          if (!candidate || typeof candidate.key !== "string") return false;
+          const candidateKey = candidate.key.trim();
+          const candidateFirstColon = candidateKey.indexOf(":");
+          const candidateSecondColon = candidateFirstColon >= 0
+            ? candidateKey.indexOf(":", candidateFirstColon + 1)
+            : -1;
+          return candidateFirstColon > 0 && candidateSecondColon > candidateFirstColon + 1 &&
+            candidateKey.slice(0, candidateFirstColon) === tenantPrefix &&
+            candidateKey.slice(candidateSecondColon + 1) === legacyLogicalKey;
+        });
+        return !hasScopedReplacement;
+      });
+
     const seenKeys = new Set();
-    const rowsToRestore = backup.data.map((row, index) => {
+    const rowsToRestore = restoreSourceRows.map(({ row, index }) => {
       if (!row || typeof row.key !== "string" || !row.key.trim()) {
         throw new Error(`Furaha xogta safka ${index + 1} waa khaldan yahay.`);
       }
