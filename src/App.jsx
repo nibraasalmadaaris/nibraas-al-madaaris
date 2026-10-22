@@ -2498,8 +2498,10 @@ const downloadBackup = async () => {
       .eq("tenant_id", CURRENT_TENANT_ID);
     if (error) throw error;
 
+    // Preserve the physical storage key so tenant/branch scope is not lost in backup.
+    // Restore remaps the old tenant prefix to the currently signed-in tenant.
     const backupData = (data || []).map((row) => ({
-      key: logicalStorageKey(row.key),
+      key: row.key,
       value: row.value,
       updated_at: row.updated_at,
       created_at: row.created_at,
@@ -2508,7 +2510,8 @@ const downloadBackup = async () => {
 
     const backup = {
       app: "Isnaad",
-      version: 2,
+      version: 3,
+      keyFormat: "physical",
       exportedAt: new Date().toISOString(),
       data: backupData,
     };
@@ -2535,7 +2538,6 @@ const restoreBackup = async (event) => {
   event.target.value = "";
   if (!file) return;
 
-  // Reject obviously unsuitable files before reading or writing anything.
   if (!file.name.toLowerCase().endsWith(".json") || file.size <= 0 || file.size > 50 * 1024 * 1024) {
     alert("Faylka backup-ku waa inuu noqdaa JSON sax ah oo ka yar 50 MB.");
     return;
@@ -2561,7 +2563,7 @@ const restoreBackup = async (event) => {
       throw new Error("Tenant-ka hadda lama aqoonsan; waxba lama beddelin.");
     }
 
-    // Validate and prepare every row before sending any write to Supabase.
+    const isPhysicalFormat = backup?.keyFormat === "physical";
     const now = new Date().toISOString();
     const seenKeys = new Set();
     const rowsToRestore = backup.data.map((row, index) => {
@@ -2572,26 +2574,52 @@ const restoreBackup = async (event) => {
         throw new Error(`Xogta safka ${index + 1} qiime (value) ma leh.`);
       }
 
-      const logicalKey = logicalStorageKey(row.key.trim());
-      const branchId = isGlobalStorageKey(logicalKey)
-        ? "__global__"
-        : (typeof row.branch_id === "string" && row.branch_id.trim() ? row.branch_id : "main");
+      let logicalKey;
+      let keyBranchScope;
+      let storedBranchId;
+
+      if (isPhysicalFormat) {
+        const rawKey = row.key.trim();
+        const firstColon = rawKey.indexOf(":");
+        const secondColon = firstColon >= 0 ? rawKey.indexOf(":", firstColon + 1) : -1;
+        if (firstColon <= 0 || secondColon < 0 || secondColon === rawKey.length - 1) {
+          throw new Error(`Furaha physical-ka ee safka ${index + 1} waa khaldan yahay.`);
+        }
+        // Ignore the old tenant ID; preserve the original scope and logical key.
+        keyBranchScope = rawKey.slice(firstColon + 1, secondColon);
+        logicalKey = rawKey.slice(secondColon + 1);
+        if (!keyBranchScope || !logicalKey) {
+          throw new Error(`Furaha physical-ka ee safka ${index + 1} waa khaldan yahay.`);
+        }
+        storedBranchId = typeof row.branch_id === "string" && row.branch_id.trim()
+          ? row.branch_id
+          : (keyBranchScope === "__global__" ? "main" : keyBranchScope);
+      } else {
+        logicalKey = logicalStorageKey(row.key.trim());
+        keyBranchScope = isGlobalStorageKey(logicalKey)
+          ? "__global__"
+          : (typeof row.branch_id === "string" && row.branch_id.trim() ? row.branch_id : "main");
+        storedBranchId = typeof row.branch_id === "string" && row.branch_id.trim() ? row.branch_id : "main";
+      }
+
       const physicalKey = physicalStorageKey(
         logicalKey,
-        branchId === "__global__" ? CURRENT_BRANCH_ID : branchId
+        keyBranchScope === "__global__" ? CURRENT_BRANCH_ID : keyBranchScope
       );
       if (!physicalKey) {
         throw new Error(`Furaha xogta safka ${index + 1} lama diyaarin karin.`);
       }
       if (seenKeys.has(physicalKey)) {
-        throw new Error(`Backup-ku wuxuu leeyahay furayaal is-dul-saaran: ${logicalKey}. Waxba lama beddelin.`);
+        throw new Error(
+          `Backup-ku wuxuu leeyahay furayaal is-dul-saaran: ${logicalKey}. Waxba lama beddelin. Samee Backup cusub oo qaabkiisa cusub ah kadib marka cusboonaysiintu diyaar noqoto.`
+        );
       }
       seenKeys.add(physicalKey);
 
       return {
         key: physicalKey,
         tenant_id: CURRENT_TENANT_ID,
-        branch_id: branchId,
+        branch_id: storedBranchId,
         value: row.value,
         updated_at: typeof row.updated_at === "string" ? row.updated_at : now,
         created_at: typeof row.created_at === "string" ? row.created_at : now,
@@ -2604,7 +2632,6 @@ const restoreBackup = async (event) => {
     );
     if (!confirmed) return;
 
-    // One batch request reduces the chance of a half-completed row-by-row restore.
     const { error } = await supabase
       .from("app_storage")
       .upsert(rowsToRestore, { onConflict: "key" });
