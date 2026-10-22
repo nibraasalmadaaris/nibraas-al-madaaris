@@ -1089,13 +1089,15 @@ function InvoicesScreen({ config, tr }) {
 
 function FinanceScreen({ config }) {
   const [txns, setTxns] = useState([]);
+  const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
   const [form, setForm] = useState({ type: "Lacag La Bixiyay", date: todayISO() });
 
   useEffect(() => {
-    loadArr("finance-data").then((arr) => {
-      setTxns(arr);
+    Promise.all([loadArr("finance-data"), loadArr("students-data")]).then(([arr, studentList]) => {
+      setTxns(Array.isArray(arr) ? arr : []);
+      setStudents(Array.isArray(studentList) ? studentList : []);
       setLoading(false);
     });
   }, []);
@@ -1132,12 +1134,17 @@ function FinanceScreen({ config }) {
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Magaca Ardayga *
             </label>
-            <input
+            <select
               value={form.studentName || ""}
               onChange={(e) => setForm((p) => ({ ...p, studentName: e.target.value }))}
+              required
               className="w-full rounded-lg border px-3 py-2.5 text-sm"
               style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
-            />
+            >
+              <option value="">Dooro arday...</option>
+              {students.map((student) => <option key={student.id || student.name} value={student.name}>{student.name}{student.className ? ` — ${student.className}` : ""}</option>)}
+            </select>
+            {students.length === 0 && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Liiska ardaydu ma soo degin. Hubi qaybta Ardayda.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -3590,6 +3597,8 @@ function QuranScreen() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
   const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [form, setForm] = useState({
     studentName: "",
     type: "Xifdhi Cusub",
@@ -3616,10 +3625,30 @@ function QuranScreen() {
   const submit = async (e) => {
     e.preventDefault();
     if (!form.studentName.trim()) return;
-    const item = { ...form, id: Date.now(), createdAt: new Date().toISOString() };
-    await persist([item, ...records]);
+    if (editingId !== null) {
+      await persist(records.map((r) => r.id === editingId ? { ...r, ...form, id: r.id } : r));
+    } else {
+      const item = { ...form, id: Date.now(), createdAt: new Date().toISOString() };
+      await persist([item, ...records]);
+    }
     setForm({ studentName: "", type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "", date: todayISO(), note: "" });
+    setEditingId(null);
     setView("list");
+  };
+
+  const editRecord = (record) => {
+    setForm({ studentName: record.studentName || "", type: record.type || "Xifdhi Cusub", surah: record.surah || "", fromAyah: record.fromAyah || "", toAyah: record.toAyah || "", date: record.date || todayISO(), note: record.note || "" });
+    setEditingId(record.id);
+    setView("form");
+  };
+
+  const deleteRecord = async (id) => {
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
+    await persist(records.filter((r) => r.id !== id));
+    setConfirmDeleteId(null);
   };
 
   const filtered = records.filter((r) => {
@@ -3636,7 +3665,7 @@ function QuranScreen() {
         <button onClick={() => setView("list")} className="flex items-center gap-1.5 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}>
           <ArrowLeft size={16} /> Dib u noqo
         </button>
-        <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Qur’aan & Xifdhi</h2>
+        <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>{editingId !== null ? "Wax ka beddel diiwaanka" : "Qur’aan & Xifdhi"}</h2>
         <SignatureChain className="mb-5" />
         <form onSubmit={submit} className="space-y-4">
           <div>
@@ -3668,7 +3697,7 @@ function QuranScreen() {
             <div><label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Aayadda lagu dhammeeyay</label><input type="number" min="1" value={form.toAyah} onChange={(e) => setForm((p) => ({ ...p, toAyah: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /></div>
           </div>
           <div><label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Faallo</label><textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, minHeight: 80 }} /></div>
-          <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand }}>Kaydi Horumarka</button>
+          <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand }}>{editingId !== null ? "Kaydi Beddelka" : "Kaydi Horumarka"}</button>
         </form>
       </div>
     );
@@ -3683,7 +3712,7 @@ function QuranScreen() {
       <SignatureChain className="mb-4" />
       <div className="grid grid-cols-2 gap-3 mb-5"><StatCard label="Diiwaannada Maanta" value={todayCount} tone="teal" /><StatCard label="Ardayda leh diiwaan" value={studentsCount} tone="light" /></div>
       <div className="relative mb-4"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Raadi arday ama suurad..." className="w-full rounded-lg border py-2.5 pl-9 pr-3 text-sm" style={{ borderColor: COLORS.line }} /></div>
-      {loading ? <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Soo dejinaya...</p> : filtered.length === 0 ? <EmptyState icon={BookOpen} text="Wali lama gelin horumar Qur’aan." /> : <div className="space-y-2">{filtered.map((r) => <div key={r.id} className="rounded-xl border px-4 py-3" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{r.studentName}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{[r.type, r.surah, r.fromAyah || r.toAyah ? `Aayado ${r.fromAyah || "?"}–${r.toAyah || "?"}` : "", fmtDate(r.date)].filter(Boolean).join(" · ")}</p>{r.note && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{r.note}</p>}</div><BookOpen size={18} style={{ color: COLORS.gold }} /></div></div>)}</div>}
+      {loading ? <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Soo dejinaya...</p> : filtered.length === 0 ? <EmptyState icon={BookOpen} text="Wali lama gelin horumar Qur’aan." /> : <div className="space-y-2">{filtered.map((r) => <div key={r.id} className="rounded-xl border px-4 py-3" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><div className="flex items-center justify-between gap-3"><div className="min-w-0 flex-1"><p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{r.studentName}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{[r.type, r.surah, r.fromAyah || r.toAyah ? `Aayado ${r.fromAyah || "?"}–${r.toAyah || "?"}` : "", fmtDate(r.date)].filter(Boolean).join(" · ")}</p>{r.note && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{r.note}</p>}</div><div className="flex items-center gap-1"><button type="button" title="Wax ka beddel" aria-label="Wax ka beddel" onClick={() => editRecord(r)} className="p-2 rounded-lg" style={{ color: COLORS.tealLight }}><Pencil size={16} /></button><button type="button" title={confirmDeleteId === r.id ? "Xaqiiji tirtiridda" : "Tirtir"} aria-label="Tirtir" onClick={() => deleteRecord(r.id)} className="p-2 rounded-lg text-xs font-semibold" style={{ color: COLORS.brick, backgroundColor: confirmDeleteId === r.id ? "#F8E8E4" : "transparent" }}><Trash2 size={16} />{confirmDeleteId === r.id ? " Xaqiiji" : ""}</button><BookOpen size={18} style={{ color: COLORS.gold }} /></div></div></div>)}</div>}
     </div>
   );
 }
