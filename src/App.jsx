@@ -3724,6 +3724,8 @@ function QuranScreen() {
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [schoolName, setSchoolName] = useState("");
+  const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
@@ -3735,13 +3737,39 @@ function LoginScreen() {
     setLoading(true);
     setError("");
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setError("Email-ka ama furaha sirta ah waa khalad.");
+    if (mode === "signup") {
+      const cleanSchoolName = schoolName.trim();
+      if (cleanSchoolName.length < 1 || cleanSchoolName.length > 120) {
+        setError("Magaca madrasaddu ha ahaado 1 ilaa 120 xaraf.");
+        setLoading(false);
+        return;
+      }
+      if (password.length < 6) {
+        setError("Furaha sirta ah ugu yaraan 6 xaraf ha noqdo.");
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { nibraas_school_name: cleanSchoolName } },
+      });
+      if (error) {
+        setError(error.message || "Akoonka lama samayn. Hubi email-ka oo isku day mar kale.");
+      } else if (data.session) {
+        // App tenant initialization will create the tenant using the saved auth metadata.
+        setResetMessage("Akoonka waa la sameeyey; madrasaddaada waa la diyaarinayaa.");
+      } else {
+        setResetMessage("Akoonka waa la sameeyey. Ka xaqiiji email-kaaga, dabadeed gal si madrasadda loo abuuro.");
+        setMode("login");
+        setPassword("");
+      }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) setError("Email-ka ama furaha sirta ah waa khalad.");
     }
 
     setLoading(false);
@@ -3809,18 +3837,32 @@ function LoginScreen() {
               color: COLORS.tealDeep,
             }}
           >
-            Gal NIBRAAS
+            {mode === "signup" ? "Diiwaangeli Madrasad" : "Gal NIBRAAS"}
           </h1>
 
           <p
             className="text-sm mt-2 text-center"
             style={{ color: COLORS.inkSoft }}
           >
-            Nidaamka Maareynta Madrasada
+            {mode === "signup" ? "Samee akoon iyo madrasad cusub" : "Nidaamka Maareynta Madrasada"}
           </p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
+          {mode === "signup" && (
+            <div>
+              <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>Magaca madrasadda</label>
+              <input
+                type="text"
+                value={schoolName}
+                onChange={(e) => setSchoolName(e.target.value)}
+                placeholder="Tusaale: Madrasada Al-Nuur"
+                required maxLength={120}
+                className="w-full rounded-lg px-3 py-2.5 outline-none"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+              />
+            </div>
+          )}
           {/* Email */}
           <div>
             <label
@@ -3912,7 +3954,15 @@ function LoginScreen() {
               color: "#fff",
             }}
           >
-            {loading ? "Fadlan sug..." : "Soo Gal"}
+            {loading ? "Fadlan sug..." : mode === "signup" ? "Samee Akoon & Madrasad" : "Soo Gal"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); setResetMessage(""); }}
+            className="w-full rounded-lg py-2 text-sm font-semibold"
+            style={{ color: COLORS.teal }}
+          >
+            {mode === "login" ? "Madrasad cusub? Isdiiwaangeli" : "Akoon hore ma leedahay? Soo gal"}
           </button>
         </form>
       </div>
@@ -5059,16 +5109,37 @@ useEffect(() => {
   setRoleLoading(true);
   setCurrentRole(null);
   setTenantError("");
-  supabase.rpc("nibraas_bootstrap").then(({ data, error }) => {
+  (async () => {
+    // Existing members continue through the original bootstrap path, preserving legacy data.
+    const first = await supabase.rpc("nibraas_bootstrap");
     if (!alive) return;
-    if (error || !data) {
-      console.error("Tenant bootstrap error:", error);
-      setTenantError(error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
+    if (!first.error && first.data) {
+      setStorageTenant(first.data);
+      setTenantReady(true);
       return;
     }
-    setStorageTenant(data);
-    setTenantReady(true);
-  });
+
+    // A newly registered user has the requested school name in Supabase Auth metadata.
+    // The registration RPC creates the tenant and Admin membership; it does not touch app_storage.
+    const requestedSchoolName = session.user.user_metadata?.nibraas_school_name;
+    if (requestedSchoolName && String(requestedSchoolName).trim()) {
+      const registered = await supabase.rpc("nibraas_register_tenant", {
+        p_name: String(requestedSchoolName).trim().slice(0, 120),
+      });
+      if (!alive) return;
+      if (!registered.error && registered.data) {
+        setStorageTenant(registered.data);
+        setTenantReady(true);
+        return;
+      }
+      console.error("Tenant registration error:", registered.error);
+      setTenantError(registered.error?.message || "Madrasadda cusub lama abuuri karin.");
+      return;
+    }
+
+    console.error("Tenant bootstrap error:", first.error);
+    setTenantError(first.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
+  })();
 
   return () => { alive = false; };
 }, [session]);
@@ -5680,5 +5751,6 @@ useEffect(() => {
     </div>
   );
 }
+
 
 
