@@ -5441,9 +5441,11 @@ useEffect(() => {
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:flex-col w-64 shrink-0" style={{ backgroundColor: COLORS.tealDeep }}>
         <div className="px-6 py-6 flex items-center gap-2">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: COLORS.gold }}>
-            <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: COLORS.tealDeep }}>N</span>
-          </div>
+          <img
+            src={logo}
+            alt="NIBRAAS logo"
+            className="w-9 h-9 rounded-lg object-contain"
+          />
           <div>
             <span className="text-lg font-semibold block" style={{ fontFamily: DISPLAY_FONT, color: "#fff" }}>
               NIBRAAS
@@ -5683,4 +5685,5 @@ useEffect(() => {
     </div>
   );
 }
+
 
