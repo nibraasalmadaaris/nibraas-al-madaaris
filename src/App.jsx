@@ -7,6 +7,7 @@ import {
   Grid3x3, Send, RotateCcw, Circle, LogOut, ShieldCheck, Banknote, BriefcaseBusiness, IdCard,
   Download, Upload, FileSpreadsheet, Trophy
 } from "lucide-react";
+import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
    NIBRAAS v31 — Nidaamka Maareynta Madrasada
