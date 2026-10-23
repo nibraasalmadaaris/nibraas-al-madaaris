@@ -5110,21 +5110,41 @@ useEffect(() => {
   setCurrentRole(null);
   setTenantError("");
   (async () => {
-    // Existing members continue through the original bootstrap path, preserving legacy data.
-    const first = await supabase.rpc("nibraas_bootstrap");
+    // IMPORTANT: check membership BEFORE bootstrap. Bootstrap may attach an unassigned
+    // account to the legacy/default school, which is wrong for public school registration.
+    const requestedSchoolName = String(session.user.user_metadata?.nibraas_school_name || "").trim();
+    const membershipCheck = await supabase
+      .from("nibraas_memberships")
+      .select("tenant_id, role")
+      .eq("user_id", session.user.id)
+      .limit(1);
     if (!alive) return;
-    if (!first.error && first.data) {
-      setStorageTenant(first.data);
-      setTenantReady(true);
+
+    if (membershipCheck.error) {
+      console.error("Membership check error:", membershipCheck.error);
+      setTenantError("Xubinimada akoonka lama xaqiijin. Fadlan dib u gal; xogtaada lama tirtirin.");
       return;
     }
 
-    // A newly registered user has the requested school name in Supabase Auth metadata.
-    // The registration RPC creates the tenant and Admin membership; it does not touch app_storage.
-    const requestedSchoolName = session.user.user_metadata?.nibraas_school_name;
-    if (requestedSchoolName && String(requestedSchoolName).trim()) {
+    // Existing users keep their current tenant and all existing app_storage data.
+    if (Array.isArray(membershipCheck.data) && membershipCheck.data.length > 0) {
+      const existing = await supabase.rpc("nibraas_bootstrap");
+      if (!alive) return;
+      if (!existing.error && existing.data) {
+        setStorageTenant(existing.data);
+        setTenantReady(true);
+        return;
+      }
+      console.error("Tenant bootstrap error:", existing.error);
+      setTenantError(existing.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
+      return;
+    }
+
+    // An account with no membership and a school name is a new public registration.
+    // Create its own tenant/Admin membership before any legacy bootstrap can run.
+    if (requestedSchoolName) {
       const registered = await supabase.rpc("nibraas_register_tenant", {
-        p_name: String(requestedSchoolName).trim().slice(0, 120),
+        p_name: requestedSchoolName.slice(0, 120),
       });
       if (!alive) return;
       if (!registered.error && registered.data) {
@@ -5137,8 +5157,16 @@ useEffect(() => {
       return;
     }
 
-    console.error("Tenant bootstrap error:", first.error);
-    setTenantError(first.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
+    // Legacy accounts without signup metadata use the original bootstrap path.
+    const legacy = await supabase.rpc("nibraas_bootstrap");
+    if (!alive) return;
+    if (!legacy.error && legacy.data) {
+      setStorageTenant(legacy.data);
+      setTenantReady(true);
+      return;
+    }
+    console.error("Tenant bootstrap error:", legacy.error);
+    setTenantError(legacy.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
   })();
 
   return () => { alive = false; };
