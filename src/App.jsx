@@ -3795,16 +3795,11 @@ function LoginScreen() {
             className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
             style={{ backgroundColor: COLORS.gold }}
           >
-            <span
-              style={{
-                fontFamily: DISPLAY_FONT,
-                fontWeight: 700,
-                fontSize: 32,
-                color: COLORS.tealDeep,
-              }}
-            >
-              I
-            </span>
+            <img
+  src={logo}
+  alt="Astaanta NIBRAAS"
+  className="h-12 w-12 object-contain"
+/>
           </div>
 
           <h1
