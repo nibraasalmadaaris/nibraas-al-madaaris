@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "NIBRAAS",
   "short_name": "NIBRAAS",
   "description": "Nidaamka Maareynta Madrasada",
@@ -9,7 +10,7 @@
   "theme_color": "#0b3d36",
   "icons": [
     {
-      "src": "/NIBRAAS-logo-avatar-512.png",
+      "src": "/NIBRAAS-logo-avatar-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
