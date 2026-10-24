@@ -3724,8 +3724,6 @@ function QuranScreen() {
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [schoolName, setSchoolName] = useState("");
-  const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
@@ -3737,39 +3735,13 @@ function LoginScreen() {
     setLoading(true);
     setError("");
 
-    if (mode === "signup") {
-      const cleanSchoolName = schoolName.trim();
-      if (cleanSchoolName.length < 1 || cleanSchoolName.length > 120) {
-        setError("Magaca madrasaddu ha ahaado 1 ilaa 120 xaraf.");
-        setLoading(false);
-        return;
-      }
-      if (password.length < 6) {
-        setError("Furaha sirta ah ugu yaraan 6 xaraf ha noqdo.");
-        setLoading(false);
-        return;
-      }
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: { data: { nibraas_school_name: cleanSchoolName } },
-      });
-      if (error) {
-        setError(error.message || "Akoonka lama samayn. Hubi email-ka oo isku day mar kale.");
-      } else if (data.session) {
-        // App tenant initialization will create the tenant using the saved auth metadata.
-        setResetMessage("Akoonka waa la sameeyey; madrasaddaada waa la diyaarinayaa.");
-      } else {
-        setResetMessage("Akoonka waa la sameeyey. Ka xaqiiji email-kaaga, dabadeed gal si madrasadda loo abuuro.");
-        setMode("login");
-        setPassword("");
-      }
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error) setError("Email-ka ama furaha sirta ah waa khalad.");
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setError("Email-ka ama furaha sirta ah waa khalad.");
     }
 
     setLoading(false);
@@ -3823,11 +3795,16 @@ function LoginScreen() {
             className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
             style={{ backgroundColor: COLORS.gold }}
           >
-            <img
-  src={logo}
-  alt="Astaanta NIBRAAS"
-  className="h-12 w-12 object-contain"
-/>
+            <span
+              style={{
+                fontFamily: DISPLAY_FONT,
+                fontWeight: 700,
+                fontSize: 32,
+                color: COLORS.tealDeep,
+              }}
+            >
+              I
+            </span>
           </div>
 
           <h1
@@ -3837,32 +3814,18 @@ function LoginScreen() {
               color: COLORS.tealDeep,
             }}
           >
-            {mode === "signup" ? "Diiwaangeli Madrasad" : "Gal NIBRAAS"}
+            Gal NIBRAAS
           </h1>
 
           <p
             className="text-sm mt-2 text-center"
             style={{ color: COLORS.inkSoft }}
           >
-            {mode === "signup" ? "Samee akoon iyo madrasad cusub" : "Nidaamka Maareynta Madrasada"}
+            Nidaamka Maareynta Madrasada
           </p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
-          {mode === "signup" && (
-            <div>
-              <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>Magaca madrasadda</label>
-              <input
-                type="text"
-                value={schoolName}
-                onChange={(e) => setSchoolName(e.target.value)}
-                placeholder="Tusaale: Madrasada Al-Nuur"
-                required maxLength={120}
-                className="w-full rounded-lg px-3 py-2.5 outline-none"
-                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-              />
-            </div>
-          )}
           {/* Email */}
           <div>
             <label
@@ -3954,15 +3917,7 @@ function LoginScreen() {
               color: "#fff",
             }}
           >
-            {loading ? "Fadlan sug..." : mode === "signup" ? "Samee Akoon & Madrasad" : "Soo Gal"}
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); setResetMessage(""); }}
-            className="w-full rounded-lg py-2 text-sm font-semibold"
-            style={{ color: COLORS.teal }}
-          >
-            {mode === "login" ? "Madrasad cusub? Isdiiwaangeli" : "Akoon hore ma leedahay? Soo gal"}
+            {loading ? "Fadlan sug..." : "Soo Gal"}
           </button>
         </form>
       </div>
@@ -5109,65 +5064,16 @@ useEffect(() => {
   setRoleLoading(true);
   setCurrentRole(null);
   setTenantError("");
-  (async () => {
-    // IMPORTANT: check membership BEFORE bootstrap. Bootstrap may attach an unassigned
-    // account to the legacy/default school, which is wrong for public school registration.
-    const requestedSchoolName = String(session.user.user_metadata?.nibraas_school_name || "").trim();
-    const membershipCheck = await supabase
-      .from("nibraas_memberships")
-      .select("tenant_id, role")
-      .eq("user_id", session.user.id)
-      .limit(1);
+  supabase.rpc("nibraas_bootstrap").then(({ data, error }) => {
     if (!alive) return;
-
-    if (membershipCheck.error) {
-      console.error("Membership check error:", membershipCheck.error);
-      setTenantError("Xubinimada akoonka lama xaqiijin. Fadlan dib u gal; xogtaada lama tirtirin.");
+    if (error || !data) {
+      console.error("Tenant bootstrap error:", error);
+      setTenantError(error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
       return;
     }
-
-    // Existing users keep their current tenant and all existing app_storage data.
-    if (Array.isArray(membershipCheck.data) && membershipCheck.data.length > 0) {
-      const existing = await supabase.rpc("nibraas_bootstrap");
-      if (!alive) return;
-      if (!existing.error && existing.data) {
-        setStorageTenant(existing.data);
-        setTenantReady(true);
-        return;
-      }
-      console.error("Tenant bootstrap error:", existing.error);
-      setTenantError(existing.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
-      return;
-    }
-
-    // An account with no membership and a school name is a new public registration.
-    // Create its own tenant/Admin membership before any legacy bootstrap can run.
-    if (requestedSchoolName) {
-      const registered = await supabase.rpc("nibraas_register_tenant", {
-        p_name: requestedSchoolName.slice(0, 120),
-      });
-      if (!alive) return;
-      if (!registered.error && registered.data) {
-        setStorageTenant(registered.data);
-        setTenantReady(true);
-        return;
-      }
-      console.error("Tenant registration error:", registered.error);
-      setTenantError(registered.error?.message || "Madrasadda cusub lama abuuri karin.");
-      return;
-    }
-
-    // Legacy accounts without signup metadata use the original bootstrap path.
-    const legacy = await supabase.rpc("nibraas_bootstrap");
-    if (!alive) return;
-    if (!legacy.error && legacy.data) {
-      setStorageTenant(legacy.data);
-      setTenantReady(true);
-      return;
-    }
-    console.error("Tenant bootstrap error:", legacy.error);
-    setTenantError(legacy.error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
-  })();
+    setStorageTenant(data);
+    setTenantReady(true);
+  });
 
   return () => { alive = false; };
 }, [session]);
@@ -5535,11 +5441,9 @@ useEffect(() => {
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:flex-col w-64 shrink-0" style={{ backgroundColor: COLORS.tealDeep }}>
         <div className="px-6 py-6 flex items-center gap-2">
-          <img
-            src={logo}
-            alt="NIBRAAS logo"
-            className="w-9 h-9 rounded-lg object-contain"
-          />
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: COLORS.gold }}>
+            <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: COLORS.tealDeep }}>N</span>
+          </div>
           <div>
             <span className="text-lg font-semibold block" style={{ fontFamily: DISPLAY_FONT, color: "#fff" }}>
               NIBRAAS
@@ -5670,13 +5574,12 @@ useEffect(() => {
           style={{ backgroundColor: COLORS.tealDeep }}
         >
           <div className="flex items-center gap-2">
-            {config.logoUrl ? (
-              <img src={config.logoUrl} alt="Logo" className="w-7 h-7 rounded-md object-cover" />
-            ) : (
-              <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ backgroundColor: COLORS.gold }}>
-                <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: 13, color: COLORS.tealDeep }}>N</span>
-              </div>
-            )}
+            <img
+              src={config.logoUrl || logo}
+              alt="NIBRAAS logo"
+              className="w-7 h-7 rounded-md object-contain"
+              onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = logo; }}
+            />
             <span className="text-base font-semibold" style={{ fontFamily: DISPLAY_FONT, color: "#fff" }}>
               {config.schoolName || "NIBRAAS"}
             </span>
@@ -5779,6 +5682,5 @@ useEffect(() => {
     </div>
   );
 }
-
 
 
