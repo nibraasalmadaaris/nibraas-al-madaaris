@@ -1,6 +1,6 @@
 {
   "id": "/",
-  "name": "NIBRAAS",
+  "name": "NIBRAAS - Al-Madaaris",
   "short_name": "NIBRAAS",
   "description": "Nidaamka Maareynta Madrasada",
   "start_url": "/",
@@ -8,6 +8,7 @@
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#0b3d36",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/NIBRAAS-logo-avatar-192.png",
@@ -19,7 +20,13 @@
       "src": "/NIBRAAS-logo-avatar-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/NIBRAAS-logo-avatar-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
