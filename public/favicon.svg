@@ -1,4 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="80" fill="#0b3d36"/>
-  <image href="/NIBRAAS-logo-avatar-512.png" width="512" height="512" preserveAspectRatio="xMidYMid meet"/>
+  <image href="/NIBRAAS-logo-avatar-512.png" x="0" y="0" width="512" height="512"/>
 </svg>
