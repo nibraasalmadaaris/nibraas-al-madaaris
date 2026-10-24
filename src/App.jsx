@@ -3722,204 +3722,275 @@ function QuranScreen() {
    App Shell
 ========================================================= */
 function LoginScreen() {
+  const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [schoolName, setSchoolName] = useState("");
+  const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const [error, setError] = useState("");
+
+  const clearMessages = () => {
+    setError("");
+    setResetMessage("");
+    setSuccessMessage("");
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
-
+    clearMessages();
     setLoading(true);
-    setError("");
+    try {
+      const { error: loginError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (loginError) setError("Email-ka ama furaha sirta ah waa khalad.");
+    } catch (err) {
+      setError(err?.message || "Soo gelitaanka waa fashilmay.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    clearMessages();
+    const cleanSchoolName = schoolName.trim();
+    const cleanName = fullName.trim();
+    const cleanEmail = email.trim().toLowerCase();
 
-    if (error) {
-      setError("Email-ka ama furaha sirta ah waa khalad.");
+    if (!cleanSchoolName || cleanSchoolName.length > 120) {
+      setError("Geli magaca madrasadda (1 ilaa 120 xaraf).");
+      return;
+    }
+    if (!cleanName) {
+      setError("Geli magacaaga oo buuxa.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Furaha sirta ah waa inuu ahaadaa ugu yaraan 6 xaraf.");
+      return;
     }
 
-    setLoading(false);
+    setLoading(true);
+    try {
+      const { data, error: signupError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: cleanName,
+            nibraas_school_name: cleanSchoolName,
+          },
+          emailRedirectTo: window.location.origin,
+        },
+      });
+
+      if (signupError) {
+        setError(signupError.message || "Akoonka lama abuuri karin.");
+        return;
+      }
+
+      if (data?.session) {
+        setSuccessMessage("Akoonka waa la abuuray. NIBRAAS wuxuu diyaarinayaa madrasaddaada.");
+      } else {
+        setSuccessMessage("Akoonka waa la bilaabay. Fadlan ka xaqiiji email-kaaga, dabadeed ku soo gal email-ka iyo password-ka aad samaysay.");
+        setMode("login");
+      }
+    } catch (err) {
+      setError(err?.message || "Diiwaangelintu way fashilantay.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleResetPassword = async () => {
-    setError("");
-    setResetMessage("");
-
+    clearMessages();
     if (!email.trim()) {
       setError("Marka hore geli email-ka.");
       return;
     }
-
     setResetLoading(true);
-
-    const { error } = await supabase.auth.resetPasswordForEmail(
-      email.trim(),
-      { redirectTo: window.location.origin }
-    );
-
-    setResetLoading(false);
-
-    if (error) {
-      setError(error.message || "Email-ka reset-ka lama dirin.");
-      return;
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        email.trim(),
+        { redirectTo: window.location.origin }
+      );
+      if (resetError) {
+        setError(resetError.message || "Email-ka reset-ka lama dirin.");
+      } else {
+        setResetMessage("Email-ka password reset-ka waa la diray. Ka eeg Gmail-ka.");
+      }
+    } catch (err) {
+      setError(err?.message || "Email-ka reset-ka lama dirin.");
+    } finally {
+      setResetLoading(false);
     }
-
-    setResetMessage("Email-ka password reset-ka waa la diray. Ka eeg Gmail-ka.");
   };
+
+  const isSignup = mode === "signup";
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center px-4"
-      style={{
-        backgroundColor: COLORS.sand,
-        fontFamily: BODY_FONT,
-      }}
+      className="min-h-screen flex items-center justify-center px-4 py-6"
+      style={{ backgroundColor: COLORS.sand, fontFamily: BODY_FONT }}
     >
       <div
-        className="w-full max-w-md rounded-2xl p-8"
+        className="w-full max-w-md rounded-2xl p-5 sm:p-8"
         style={{
           backgroundColor: "#fff",
           border: `1px solid ${COLORS.line}`,
           boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
         }}
       >
-        {/* Logo */}
-        <div className="flex flex-col items-center mb-8">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
-            style={{ backgroundColor: COLORS.gold }}
-          >
-            <span
-              style={{
-                fontFamily: DISPLAY_FONT,
-                fontWeight: 700,
-                fontSize: 32,
-                color: COLORS.tealDeep,
-              }}
-            >
-              I
-            </span>
+        <div className="flex flex-col items-center mb-6">
+          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4 overflow-hidden bg-white">
+            <img
+              src={logo}
+              alt="Astaanta NIBRAAS"
+              className="w-full h-full object-contain"
+            />
           </div>
-
           <h1
-            className="text-2xl font-bold"
-            style={{
-              fontFamily: DISPLAY_FONT,
-              color: COLORS.tealDeep,
-            }}
+            className="text-2xl font-bold text-center"
+            style={{ fontFamily: DISPLAY_FONT, color: COLORS.tealDeep }}
           >
-            Gal NIBRAAS
+            {isSignup ? "Diiwaangeli Madrasad" : "Gal NIBRAAS"}
           </h1>
-
-          <p
-            className="text-sm mt-2 text-center"
-            style={{ color: COLORS.inkSoft }}
-          >
+          <p className="text-sm mt-2 text-center" style={{ color: COLORS.inkSoft }}>
             Nidaamka Maareynta Madrasada
           </p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          {/* Email */}
+        <form onSubmit={isSignup ? handleSignup : handleLogin} className="space-y-4">
+          {isSignup && (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>
+                  Magaca madrasadda
+                </label>
+                <input
+                  type="text"
+                  value={schoolName}
+                  onChange={(e) => setSchoolName(e.target.value)}
+                  placeholder="Tusaale: Madrasada Al-Huda"
+                  maxLength={120}
+                  required
+                  className="w-full rounded-lg px-3 py-2.5 outline-none"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>
+                  Magacaaga oo buuxa
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Magacaaga"
+                  required
+                  autoComplete="name"
+                  className="w-full rounded-lg px-3 py-2.5 outline-none"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                />
+              </div>
+            </>
+          )}
+
           <div>
-            <label
-              className="block text-sm font-medium mb-1.5"
-              style={{ color: COLORS.ink }}
-            >
+            <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>
               Email-ka
             </label>
-
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@example.com"
               required
+              autoComplete="email"
               className="w-full rounded-lg px-3 py-2.5 outline-none"
-              style={{
-                border: `1px solid ${COLORS.line}`,
-                color: COLORS.ink,
-              }}
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
             />
           </div>
 
-          {/* Password */}
           <div>
-            <label
-              className="block text-sm font-medium mb-1.5"
-              style={{ color: COLORS.ink }}
-            >
+            <label className="block text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>
               Furaha sirta ah
             </label>
-
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
+              minLength={6}
+              autoComplete={isSignup ? "new-password" : "current-password"}
               className="w-full rounded-lg px-3 py-2.5 outline-none"
-              style={{
-                border: `1px solid ${COLORS.line}`,
-                color: COLORS.ink,
-              }}
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
             />
           </div>
 
-          {/* Error */}
           {error && (
-            <div
-              className="rounded-lg px-3 py-2.5 text-sm"
-              style={{
-                backgroundColor: "#FDECEC",
-                color: COLORS.brick,
-              }}
-            >
+            <div className="rounded-lg px-3 py-2.5 text-sm" style={{ backgroundColor: "#FDECEC", color: COLORS.brick }}>
               {error}
             </div>
           )}
-
           {resetMessage && (
-            <div
-              className="rounded-lg px-3 py-2.5 text-sm"
-              style={{
-                backgroundColor: "#E8F5F1",
-                color: COLORS.tealDeep,
-              }}
-            >
+            <div className="rounded-lg px-3 py-2.5 text-sm" style={{ backgroundColor: "#E8F5F1", color: COLORS.tealDeep }}>
               {resetMessage}
             </div>
           )}
+          {successMessage && (
+            <div className="rounded-lg px-3 py-2.5 text-sm" style={{ backgroundColor: "#E8F5F1", color: COLORS.tealDeep }}>
+              {successMessage}
+            </div>
+          )}
 
-          <button
-            type="button"
-            onClick={handleResetPassword}
-            disabled={resetLoading}
-            className="w-full text-sm font-semibold py-1"
-            style={{ color: COLORS.teal }}
-          >
-            {resetLoading ? "Email-ka diraya..." : "Furaha sirta ah waan ilaaway"}
-          </button>
+          {!isSignup && (
+            <button
+              type="button"
+              onClick={handleResetPassword}
+              disabled={resetLoading}
+              className="w-full text-sm font-semibold py-1"
+              style={{ color: COLORS.teal }}
+            >
+              {resetLoading ? "Email-ka diraya..." : "Furaha sirta ah waan ilaaway"}
+            </button>
+          )}
 
-          {/* Button */}
           <button
             type="submit"
             disabled={loading}
             className="w-full rounded-lg py-3 font-semibold transition"
-            style={{
-              backgroundColor: loading ? COLORS.inkSoft : COLORS.teal,
-              color: "#fff",
-            }}
+            style={{ backgroundColor: loading ? COLORS.inkSoft : COLORS.teal, color: "#fff" }}
           >
-            {loading ? "Fadlan sug..." : "Soo Gal"}
+            {loading
+              ? "Fadlan sug..."
+              : isSignup
+                ? "Samee Akoon & Madrasad"
+                : "Soo Gal"}
           </button>
         </form>
+
+        <div className="mt-5 text-center text-sm" style={{ color: COLORS.inkSoft }}>
+          {isSignup ? "Akoon ma leedahay? " : "Madrasad cusub? "}
+          <button
+            type="button"
+            onClick={() => {
+              clearMessages();
+              setMode(isSignup ? "login" : "signup");
+            }}
+            className="font-bold underline underline-offset-2"
+            style={{ color: COLORS.teal }}
+          >
+            {isSignup ? "Soo gal" : "Isdiiwaangeli"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -5064,7 +5135,56 @@ useEffect(() => {
   setRoleLoading(true);
   setCurrentRole(null);
   setTenantError("");
-  supabase.rpc("nibraas_bootstrap").then(({ data, error }) => {
+  (async () => {
+    // Existing members keep their current tenant. New public signups carry the
+    // school name in Auth metadata and must register a tenant before bootstrap.
+    const requestedSchoolName = String(
+      session.user.user_metadata?.nibraas_school_name || ""
+    ).trim();
+
+    const { data: memberships, error: membershipError } = await supabase
+      .from("nibraas_memberships")
+      .select("tenant_id")
+      .eq("user_id", session.user.id)
+      .limit(1);
+
+    if (!alive) return;
+    if (membershipError) {
+      console.error("Membership check error:", membershipError);
+      setTenantError("Xubinimada akoonka lama xaqiijin. Fadlan dib u gal.");
+      return;
+    }
+
+    if (Array.isArray(memberships) && memberships.length > 0) {
+      const { data, error } = await supabase.rpc("nibraas_bootstrap");
+      if (!alive) return;
+      if (error || !data) {
+        console.error("Tenant bootstrap error:", error);
+        setTenantError(error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
+        return;
+      }
+      setStorageTenant(data);
+      setTenantReady(true);
+      return;
+    }
+
+    if (requestedSchoolName) {
+      const { data, error } = await supabase.rpc("nibraas_register_tenant", {
+        p_name: requestedSchoolName.slice(0, 120),
+      });
+      if (!alive) return;
+      if (error || !data) {
+        console.error("Tenant registration error:", error);
+        setTenantError(error?.message || "Madrasadda cusub lama abuuri karin.");
+        return;
+      }
+      setStorageTenant(data);
+      setTenantReady(true);
+      return;
+    }
+
+    // Legacy first account flow remains unchanged for accounts without signup metadata.
+    const { data, error } = await supabase.rpc("nibraas_bootstrap");
     if (!alive) return;
     if (error || !data) {
       console.error("Tenant bootstrap error:", error);
@@ -5073,7 +5193,7 @@ useEffect(() => {
     }
     setStorageTenant(data);
     setTenantReady(true);
-  });
+  })();
 
   return () => { alive = false; };
 }, [session]);
@@ -5682,5 +5802,6 @@ useEffect(() => {
     </div>
   );
 }
+
 
 
