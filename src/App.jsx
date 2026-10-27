@@ -5461,7 +5461,17 @@ useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [config, setConfig] = useState({ schoolName: "NIBRAAS", logoUrl: "", address: "", phone: "", email: "", currency: "$" });
+  // Keep NIBRAAS as the product brand, while using the registered school name
+  // as the initial school label when available. The saved Supabase config-data
+  // is still loaded below and remains the source of truth for existing schools.
+  const [config, setConfig] = useState({
+    schoolName: String(session?.user?.user_metadata?.nibraas_school_name || "").trim() || "NIBRAAS",
+    logoUrl: "",
+    address: "",
+    phone: "",
+    email: "",
+    currency: "$",
+  });
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -5802,6 +5812,7 @@ useEffect(() => {
     </div>
   );
 }
+
 
 
 
