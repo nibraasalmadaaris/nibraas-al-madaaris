@@ -229,11 +229,24 @@ function SignatureChain({ className = "" }) {
 const USER_ROLES = ["Admin", "Maamule", "Macalin", "Xisaabiye", "Shaqaale"];
 
 const ROLE_PERMISSIONS = {
+  // Admin: awood buuxda oo ku kooban tenant-kiisa; RLS waa inuu tan ka madax-bannaanaadaa.
   Admin: ["*"],
-  Maamule: ["home", "students", "employees", "users", "classes", "attendance", "activities", "complaints", "progress", "quran", "exams", "finance", "invoices", "payroll", "reports", "sms", "parents", "communication", "idcards", "jadwal", "security", "excel", "achievements", "daily", "config"],
-  Macalin: ["home", "students", "classes", "attendance", "activities", "progress", "quran", "exams", "payroll", "jadwal", "reports", "excel", "achievements", "daily"],
+  // Maamule: maamulka hawlgalka dugsiga; ma geli karo baaritaanka amniga/production-ka.
+  Maamule: ["home", "students", "employees", "users", "classes", "attendance", "activities", "complaints", "progress", "quran", "exams", "finance", "invoices", "payroll", "reports", "sms", "parents", "communication", "idcards", "jadwal", "excel", "achievements", "daily", "config"],
+  // Macalin: xogta waxbarashada; lagama oggola mushahar, maaliyad, maamulka users ama export guud.
+  Macalin: ["home", "students", "classes", "attendance", "activities", "progress", "quran", "exams", "jadwal", "achievements", "daily"],
+  // Xisaabiye: maaliyadda iyo warbixinnada la xiriira.
   Xisaabiye: ["home", "finance", "invoices", "payroll", "reports", "excel"],
+  // Shaqaale: shaqooyinka aasaasiga ah ee loo xilsaaray.
   Shaqaale: ["home", "students", "attendance", "activities", "complaints"],
+};
+
+const ROLE_DESCRIPTIONS = {
+  Admin: "Maamulka buuxa ee tenant-ka dugsiga.",
+  Maamule: "Maamulka hawlgalka dugsiga, shaqaalaha, users iyo dejimaha.",
+  Macalin: "Waxbarashada, fasallada, xaadirinta iyo horumarka ardayda.",
+  Xisaabiye: "Maaliyadda, biilasha, mushaharka iyo warbixinnada.",
+  Shaqaale: "Ardayda, xaadirinta, hawlaha iyo cabashooyinka.",
 };
 
 function canAccess(role, id) {
@@ -242,7 +255,7 @@ function canAccess(role, id) {
 }
 
 
-function UsersScreen() {
+function UsersScreen({ currentRole }) {
   const [users, setUsers] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "Macalin" });
@@ -270,6 +283,10 @@ function UsersScreen() {
     const email = form.email.trim().toLowerCase();
     const password = form.password;
 
+    if (form.role === "Admin" && currentRole !== "Admin") {
+      setError("Admin cusub waxaa abuuri kara Admin-ka hadda jira oo keliya.");
+      return;
+    }
     if (!name || !email || !password) {
       setError("Magaca, email-ka iyo password-ka waa loo baahan yahay.");
       return;
@@ -372,6 +389,27 @@ function UsersScreen() {
       </div>
 
       <div className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }}>
+        <div className="flex items-center gap-2 mb-3">
+          <ShieldCheck size={20} style={{ color: COLORS.teal }} />
+          <h2 className="font-semibold" style={{ color: COLORS.ink }}>Doorarka iyo awoodahooda</h2>
+        </div>
+        <p className="text-xs mb-4" style={{ color: COLORS.inkSoft }}>Liiskani wuxuu muujinayaa qaybaha App-ku u oggolaanayo door kasta. Waa xaddidaad muuqaal/App ah; RLS iyo Edge Functions waa inay sidoo kale xaqiijiyaan oggolaanshaha server-ka.</p>
+        <div className="grid md:grid-cols-2 gap-3">
+          {USER_ROLES.map((role) => {
+            const allowed = ROLE_PERMISSIONS[role] || ["home"];
+            const labels = allowed.includes("*")
+              ? ["Dhammaan qaybaha App-ka"]
+              : allowed.map((id) => NAV.find((item) => item.id === id)?.label || id);
+            return <div key={role} className="rounded-xl border p-4" style={{ borderColor: COLORS.line }}>
+              <div className="font-semibold" style={{ color: COLORS.ink }}>{role}</div>
+              <p className="text-xs mt-1 mb-2" style={{ color: COLORS.inkSoft }}>{ROLE_DESCRIPTIONS[role]}</p>
+              <p className="text-xs leading-5">{labels.join(" · ")}</p>
+            </div>;
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }}>
         <div className="flex items-center gap-2 mb-4">
           <ShieldCheck size={20} style={{ color: COLORS.teal }} />
           <h2 className="font-semibold" style={{ color: COLORS.ink }}>Ku dar User cusub</h2>
@@ -382,7 +420,7 @@ function UsersScreen() {
           <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password (ugu yaraan 6)" className="rounded-lg px-3 py-2.5 outline-none" style={{ border: `1px solid ${COLORS.line}` }} />
           <div className="flex gap-2">
             <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="flex-1 rounded-lg px-3 py-2.5 outline-none" style={{ border: `1px solid ${COLORS.line}` }}>
-              {USER_ROLES.map((role) => <option key={role}>{role}</option>)}
+              {USER_ROLES.filter((role) => currentRole === "Admin" || role !== "Admin").map((role) => <option key={role}>{role}</option>)}
             </select>
             <button disabled={saving} type="submit" className="px-4 rounded-lg font-semibold" style={{ backgroundColor: saving ? COLORS.inkSoft : COLORS.teal, color: "#fff" }}>
               {saving ? "Abuuraya..." : "Ku dar"}
@@ -420,6 +458,7 @@ const ENTITY_SCHEMAS = {
       { key: "name", label: "Magaca oo Buuxa", type: "text", required: true },
       { key: "className", label: "Fasalka", type: "text" },
       { key: "age", label: "Da'da", type: "number" },
+      { key: "gender", label: "Jinsiga", type: "select", options: ["Lab", "Dhedig"] },
       { key: "parentName", label: "Magaca Waalidka", type: "text" },
       { key: "parentPhone", label: "Lambarka Waalidka", type: "tel" },
       { key: "status", label: "Xaalada", type: "select", options: ["Firfircoon", "Joojiyay"] },
@@ -1093,6 +1132,7 @@ function FinanceScreen({ config }) {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("list");
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ type: "Lacag La Bixiyay", date: todayISO() });
 
   useEffect(() => {
@@ -1110,11 +1150,27 @@ function FinanceScreen({ config }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.studentName || !form.amount) return;
-    const newItem = { ...form, id: Date.now() };
-    await persist([newItem, ...txns]);
+    if (!form.studentName || !form.amount || Number(form.amount) <= 0) return;
+    if (editingId !== null) {
+      await persist(txns.map(t => String(t.id) === String(editingId) ? { ...t, ...form, amount: Number(form.amount), id: t.id, updatedAt: new Date().toISOString() } : t));
+    } else {
+      const newItem = { ...form, amount: Number(form.amount), id: Date.now(), createdAt: new Date().toISOString() };
+      await persist([newItem, ...txns]);
+    }
     setForm({ type: "Lacag La Bixiyay", date: todayISO() });
+    setEditingId(null);
     setView("list");
+  };
+
+  const editTxn = (txn) => {
+    setForm({ type: txn.type || "Lacag La Bixiyay", date: txn.date || todayISO(), studentName: txn.studentName || "", amount: String(txn.amount ?? ""), note: txn.note || "" });
+    setEditingId(txn.id);
+    setView("form");
+  };
+
+  const deleteTxn = async (txn) => {
+    if (!window.confirm(`Ma hubtaa inaad tirtirto diiwaanka ${txn.studentName || "lacagta"}?`)) return;
+    await persist(txns.filter(t => String(t.id) !== String(txn.id)));
   };
 
   const collected = txns.filter((t) => t.type === "Lacag La Bixiyay").reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -1127,7 +1183,7 @@ function FinanceScreen({ config }) {
           <ArrowLeft size={16} /> Dib u noqo
         </button>
         <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
-          Diiwaan Gelin Lacag
+          {editingId !== null ? "Wax ka beddel Diiwaanka Lacagta" : "Diiwaan Gelin Lacag"}
         </h2>
         <SignatureChain className="mb-5" />
         <form onSubmit={submit} className="space-y-4">
@@ -1199,7 +1255,7 @@ function FinanceScreen({ config }) {
             />
           </div>
           <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}>
-            Kaydi
+            {editingId !== null ? "Kaydi Beddelka" : "Kaydi"}
           </button>
         </form>
       </div>
@@ -1245,13 +1301,13 @@ function FinanceScreen({ config }) {
                   {fmtDate(t.date)} {t.note ? `· ${t.note}` : ""}
                 </p>
               </div>
-              <p
-                className="text-sm font-bold"
-                style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}
-              >
-                {t.type === "Deyn" ? "-" : "+"}
-                {fmtMoney(t.amount, config.currency)}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold" style={{ color: t.type === "Deyn" ? COLORS.brick : COLORS.tealLight, fontFamily: BODY_FONT }}>
+                  {t.type === "Deyn" ? "-" : "+"}{fmtMoney(t.amount, config.currency)}
+                </p>
+                <button type="button" onClick={() => editTxn(t)} className="rounded-lg border px-2 py-1 text-xs font-semibold" style={{ borderColor: COLORS.line, color: COLORS.teal }}>Wax ka beddel</button>
+                <button type="button" onClick={() => deleteTxn(t)} className="rounded-lg px-2 py-1 text-xs font-semibold" style={{ backgroundColor: "#FDECEC", color: COLORS.brick }}>Tirtir</button>
+              </div>
             </div>
           ))}
         </div>
@@ -1296,8 +1352,19 @@ function ParentsScreen() {
 
   useEffect(() => {
     Promise.all([loadArr("parents-data"), loadArr("students-data")]).then(([p, s]) => {
-      setParents(Array.isArray(p) ? p : []);
-      setStudents(Array.isArray(s) ? s : []);
+      const savedParents = Array.isArray(p) ? p : [];
+      const studentList = Array.isArray(s) ? s : [];
+      // Waalidka lagu qoray diiwaangelinta ardayga ha uga muuqdo Parent Portal,
+      // si aan mar labaad xog isku mid ah loo qorin.
+      const known = new Set(savedParents.map(x => `${String(x.phone || "").replace(/\D/g, "")}|${String(x.name || "").trim().toLowerCase()}`));
+      const linked = studentList.filter(st => String(st.parentName || "").trim() && String(st.parentPhone || "").trim()).map(st => {
+        const key = `${String(st.parentPhone).replace(/\D/g, "")}|${String(st.parentName).trim().toLowerCase()}`;
+        if (known.has(key)) return null;
+        known.add(key);
+        return { id: `student-parent-${st.id}`, name: st.parentName, phone: st.parentPhone, email: "", studentName: st.name, relation: "Mas'uul", portalStatus: "Aan la hawlgelin", linkedFromStudent: true };
+      }).filter(Boolean);
+      setParents([...linked, ...savedParents]);
+      setStudents(studentList);
       setLoaded(true);
     });
   }, []);
@@ -3180,7 +3247,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
             {config.schoolName || "NIBRAAS"}
           </h1>
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>
-            Dulmar maamulka, waxbarashada, xaadirinta iyo dhaqaalaha ee maanta.
+            Dulmar ku saabsan xogta aad doorkaaga ku geli karto maanta.
           </p>
         </div>
         <button onClick={refreshDashboard} className="self-start md:self-auto rounded-lg px-4 py-2.5 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>
@@ -3191,7 +3258,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
       <SignatureChain className="mb-7" />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
-        {cards.map((card) => {
+        {cards.filter((card) => canAccess(currentRole, card.action)).map((card) => {
           const tone = toneStyle(card.tone);
           const allowed = canAccess(currentRole, card.action);
           return (
@@ -3212,25 +3279,27 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
         })}
       </div>
 
-      <div className="grid lg:grid-cols-[1.2fr_0.8fr] gap-5 mb-6">
-        <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }}>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Dhaqaalaha</p>
-              <h2 className="text-lg font-semibold mt-1" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Lacagta la ururiyay — 6 bilood</h2>
-            </div>
-            {canAccess(currentRole, "finance") && <button onClick={() => goTo("finance")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Maaliyadda</button>}
-          </div>
-          <div className="h-44 flex items-end gap-3">
-            {monthlyFinance.map((m) => (
-              <div key={m.key} className="flex-1 h-full flex flex-col justify-end items-center gap-2">
-                <span className="text-[10px] font-semibold" style={{ color: COLORS.inkSoft }}>{m.value ? fmtMoney(m.value, config.currency) : "—"}</span>
-                <div className="w-full rounded-t-lg" style={{ height: `${Math.max(8, (m.value / maxFinance) * 115)}px`, backgroundColor: COLORS.teal }} />
-                <span className="text-[10px]" style={{ color: COLORS.inkSoft }}>{m.label}</span>
+      <div className={`grid ${canAccess(currentRole, "finance") ? "lg:grid-cols-[1.2fr_0.8fr]" : "lg:grid-cols-1"} gap-5 mb-6`}>
+        {canAccess(currentRole, "finance") && (
+          <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Dhaqaalaha</p>
+                <h2 className="text-lg font-semibold mt-1" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Lacagta la ururiyay — 6 bilood</h2>
               </div>
-            ))}
-          </div>
-        </section>
+              <button onClick={() => goTo("finance")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Maaliyadda</button>
+            </div>
+            <div className="h-44 flex items-end gap-3">
+              {monthlyFinance.map((m) => (
+                <div key={m.key} className="flex-1 h-full flex flex-col justify-end items-center gap-2">
+                  <span className="text-[10px] font-semibold" style={{ color: COLORS.inkSoft }}>{m.value ? fmtMoney(m.value, config.currency) : "—"}</span>
+                  <div className="w-full rounded-t-lg" style={{ height: `${Math.max(8, (m.value / maxFinance) * 115)}px`, backgroundColor: COLORS.teal }} />
+                  <span className="text-[10px]" style={{ color: COLORS.inkSoft }}>{m.label}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section className="rounded-2xl p-5" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>
           <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Waxqabadka</p>
@@ -3247,7 +3316,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
           </div>
           <div className="grid grid-cols-2 gap-3 mt-6">
             <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Ardayda Qur’aanka</p><p className="text-xl font-bold mt-1">{quranStudents}</p></div>
-            <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Mushahar la diiwaangeliyay</p><p className="text-sm font-bold mt-2">{fmtMoney(payrollTotal, config.currency)}</p></div>
+            {canAccess(currentRole, "payroll") && <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Mushahar la diiwaangeliyay</p><p className="text-sm font-bold mt-2">{fmtMoney(payrollTotal, config.currency)}</p></div>}
           </div>
         </section>
       </div>
@@ -5476,9 +5545,33 @@ useEffect(() => {
   useEffect(() => {
     if (!session?.user?.id) return;
 
+    // Prefer the registered school name when saved config still contains the
+    // generic product label "NIBRAAS". Keep a real saved school name if one
+    // has already been configured in Settings.
+    const registeredSchoolName = String(
+      session.user.user_metadata?.nibraas_school_name || ""
+    ).trim();
+
+    let alive = true;
     loadObj("config-data", null).then((c) => {
-      if (c) setConfig(c);
+      if (!alive) return;
+      const savedConfig = c && typeof c === "object" ? c : {};
+      const savedSchoolName = String(savedConfig.schoolName || "").trim();
+      const savedNameIsGeneric =
+        !savedSchoolName || savedSchoolName.toLowerCase() === "nibraas";
+
+      setConfig((previous) => ({
+        ...previous,
+        ...savedConfig,
+        schoolName: savedNameIsGeneric
+          ? (registeredSchoolName || savedSchoolName || previous.schoolName || "NIBRAAS")
+          : savedSchoolName,
+      }));
+    }).catch((error) => {
+      console.error("School config load error:", error);
     });
+
+    return () => { alive = false; };
   }, [session]);
 
   const goTo = (id) => {
@@ -5511,7 +5604,7 @@ useEffect(() => {
     if (active === "invoices") return <InvoicesScreen config={config} tr={tr} />;
     if (active === "payroll") return <PayrollScreen config={config} />;
     if (active === "sms") return <SmsScreen tr={tr} />;
-    if (active === "users") return <UsersScreen />;
+    if (active === "users") return <UsersScreen currentRole={currentRole} />;
     if (active === "reports") return <ReportsScreen config={config} />;
     if (active === "parents") return <ParentsScreen />;
     if (active === "communication") return <ParentCommunicationScreen />;
