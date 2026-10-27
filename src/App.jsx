@@ -43,6 +43,34 @@ function useBrandFonts() {
 const DISPLAY_FONT = "'Fraunces', serif";
 const BODY_FONT = "'Manrope', sans-serif";
 
+/* Searchable student picker shared by every student-selection field. */
+function StudentSearchSelect({ students = [], value = "", onChange, placeholder = "Raadi magaca ardayga...", allowAll = false, allLabel = "Dhammaan", valueKey = "name", className = "w-full rounded-lg border px-3 py-2.5 text-sm", style = {} }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const selected = students.find((s) => String(s?.[valueKey] ?? "") === String(value));
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filtered = students.filter((s) => {
+    const searchable = [
+      s?.name, s?.className, s?.parentName, s?.parentPhone, s?.phone,
+      s?.studentNumber, s?.registrationNo, s?.admissionNo, s?.studentId, s?.id,
+    ].filter((part) => part !== null && part !== undefined).join(" ").toLocaleLowerCase();
+    return !normalizedQuery || searchable.includes(normalizedQuery);
+  }).slice(0, 100);
+  const borderColor = style.borderColor || COLORS.line;
+  return <div className="relative w-full">
+    <div className="relative">
+      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: COLORS.inkSoft }} />
+      <input role="combobox" aria-expanded={open} aria-autocomplete="list" value={open ? query : (selected ? `${selected.name}${selected.className ? ` — ${selected.className}` : ""}` : (allowAll && value === "Dhammaan" ? allLabel : ""))} onFocus={() => { setQuery(""); setOpen(true); }} onChange={(e) => { setQuery(e.target.value); setOpen(true); }} onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); if (e.key === "Enter" && filtered.length) { e.preventDefault(); onChange(String(filtered[0]?.[valueKey] ?? "")); setOpen(false); setQuery(""); } }} placeholder={placeholder} autoComplete="off" className={`${className} pl-9 pr-3`} style={{ ...style, borderColor, backgroundColor: style.backgroundColor || "#fff" }} />
+    </div>
+    {open && <><button type="button" aria-label="Xir raadinta" className="fixed inset-0 z-20 cursor-default" onClick={() => setOpen(false)} style={{ background: "transparent" }} /><div role="listbox" className="absolute z-30 mt-1 w-full max-h-60 overflow-y-auto rounded-lg border shadow-lg" style={{ borderColor, backgroundColor: "#fff" }}>
+      {allowAll && <button type="button" role="option" className="block w-full text-left px-3 py-2.5 text-sm hover:bg-amber-50" onClick={() => { onChange("Dhammaan"); setOpen(false); setQuery(""); }}>{allLabel}</button>}
+      {filtered.map((student, i) => <button type="button" role="option" aria-selected={String(student?.[valueKey] ?? "") === String(value)} key={student.id || `${student.name}-${i}`} className="block w-full text-left px-3 py-2.5 text-sm hover:bg-amber-50 border-t" style={{ borderColor: "#eee8d9" }} onClick={() => { onChange(String(student?.[valueKey] ?? "")); setOpen(false); setQuery(""); }}><span className="block font-medium">{student.name}</span>{student.className && <span className="block text-xs" style={{ color: COLORS.inkSoft }}>{student.className}</span>}</button>)}
+      {filtered.length === 0 && <p className="px-3 py-3 text-sm" style={{ color: COLORS.inkSoft }}>Arday lama helin. Hubi magaca aad qortay.</p>}
+    </div></>}
+  </div>;
+}
+
+
 /* ---------- secure tenant/branch storage ---------- */
 const GLOBAL_STORAGE_KEYS = new Set(["user-profiles", "config-data", "branches-data"]);
 let CURRENT_TENANT_ID = null;
@@ -1051,10 +1079,7 @@ function InvoicesScreen({ config, tr }) {
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Ardayga *</label>
             {students.length ? (
-              <select value={form.studentId} onChange={(e) => chooseStudent(e.target.value)} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}>
-                <option value="">Dooro arday...</option>
-                {students.map((st) => <option key={st.id} value={st.id}>{st.name}{st.className ? ` — ${st.className}` : ""}</option>)}
-              </select>
+              <StudentSearchSelect students={students} value={form.studentId} onChange={chooseStudent} placeholder="Raadi magaca ardayga..." valueKey="id" style={{ borderColor: COLORS.line }} />
             ) : (
               <input value={form.studentName} onChange={(e) => setForm((p) => ({ ...p, studentName: e.target.value }))} placeholder="Magaca ardayga" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
             )}
@@ -1191,16 +1216,7 @@ function FinanceScreen({ config }) {
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
               Magaca Ardayga *
             </label>
-            <select
-              value={form.studentName || ""}
-              onChange={(e) => setForm((p) => ({ ...p, studentName: e.target.value }))}
-              required
-              className="w-full rounded-lg border px-3 py-2.5 text-sm"
-              style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
-            >
-              <option value="">Dooro arday...</option>
-              {students.map((student) => <option key={student.id || student.name} value={student.name}>{student.name}{student.className ? ` — ${student.className}` : ""}</option>)}
-            </select>
+            <StudentSearchSelect students={students} value={form.studentName || ""} onChange={(v) => setForm((p) => ({ ...p, studentName: v }))} placeholder="Raadi magaca ardayga..." style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }} />
             {students.length === 0 && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Liiska ardaydu ma soo degin. Hubi qaybta Ardayda.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1475,18 +1491,7 @@ function ParentsScreen() {
               className="rounded-lg border px-3 py-2.5 outline-none"
               style={{ borderColor: COLORS.line }}
             />
-            <select
-              value={form.studentName}
-              onChange={(e) => setForm({ ...form, studentName: e.target.value })}
-              required
-              className="rounded-lg border px-3 py-2.5 outline-none"
-              style={{ borderColor: COLORS.line }}
-            >
-              <option value="">Dooro ardayga...</option>
-              {students.map((s) => (
-                <option key={s.id} value={s.name}>{s.name}</option>
-              ))}
-            </select>
+            <StudentSearchSelect students={students} value={form.studentName} onChange={(v) => setForm({ ...form, studentName: v })} placeholder="Raadi magaca ardayga..." className="rounded-lg border px-3 py-2.5 outline-none" style={{ borderColor: COLORS.line }} />
             <select
               value={form.relation}
               onChange={(e) => setForm({ ...form, relation: e.target.value })}
@@ -2375,7 +2380,7 @@ function ReportsScreen({ config }) {
           <div><label className="block text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>Laga bilaabo</label><input type="date" value={filters.from} onChange={(e) => setFilters((p) => ({ ...p, from: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: COLORS.line }} /></div>
           <div><label className="block text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>Ilaa</label><input type="date" value={filters.to} onChange={(e) => setFilters((p) => ({ ...p, to: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: COLORS.line }} /></div>
           <div><label className="block text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>Fasalka</label><select value={filters.className} onChange={(e) => setFilters((p) => ({ ...p, className: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: COLORS.line }}><option>Dhammaan</option>{classes.map((c) => <option key={c}>{c}</option>)}</select></div>
-          <div><label className="block text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>Ardayga</label><select value={filters.student} onChange={(e) => setFilters((p) => ({ ...p, student: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: COLORS.line }}><option>Dhammaan</option>{studentsForFilter.map((s) => <option key={s}>{s}</option>)}</select></div>
+          <div><label className="block text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>Ardayga</label><StudentSearchSelect students={studentsForFilter.map((name) => ({ name }))} value={filters.student} onChange={(v) => setFilters((p) => ({ ...p, student: v }))} placeholder="Raadi ardayga..." allowAll allLabel="Dhammaan" style={{ borderColor: COLORS.line }} /></div>
         </div>
         <button onClick={resetFilters} className="mt-3 text-xs font-semibold" style={{ color: COLORS.tealLight }}>Nadiifi filters</button>
       </div>
@@ -3463,7 +3468,7 @@ function ProgressScreen() {
       {tab === "form" && <form onSubmit={addProgress} className="max-w-2xl mx-auto rounded-xl border p-5" style={{borderColor:COLORS.line,backgroundColor:'#fff'}}>
         <h3 className="font-semibold mb-1" style={{color:COLORS.ink,fontFamily:DISPLAY_FONT}}>Diiwaangeli Horumarka Ardayga</h3><p className="text-xs mb-5" style={{color:COLORS.inkSoft}}>Geli natiijada ama qiimeynta maadada.</p>
         <div className="space-y-4">
-          <select value={progressForm.studentName} onChange={e=>setProgressForm(p=>({...p,studentName:e.target.value}))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option value="">Dooro arday...</option>{students.map(s=><option key={s.id} value={s.name}>{s.name}{s.className?` — ${s.className}`:''}</option>)}</select>
+          <StudentSearchSelect students={students} value={progressForm.studentName} onChange={(v)=>setProgressForm(p=>({...p,studentName:v}))} placeholder="Raadi magaca ardayga..." style={{borderColor:COLORS.line}} />
           <div className="grid md:grid-cols-2 gap-3"><select value={progressForm.subject} onChange={e=>setProgressForm(p=>({...p,subject:e.target.value}))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option value="">Dooro maado...</option>{subjects.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select><select value={progressForm.term} onChange={e=>setProgressForm(p=>({...p,term:e.target.value}))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option>Semester 1</option><option>Semester 2</option><option>Sanad Dugsi</option></select></div>
           <div className="grid md:grid-cols-3 gap-3"><input type="number" min="0" max="100" value={progressForm.score} onChange={e=>setProgressForm(p=>({...p,score:e.target.value}))} placeholder="Dhibco %" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}/><input type="date" value={progressForm.date} onChange={e=>setProgressForm(p=>({...p,date:e.target.value}))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}/><input value={progressForm.teacher} onChange={e=>setProgressForm(p=>({...p,teacher:e.target.value}))} placeholder="Macalin" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}/></div>
           <textarea value={progressForm.note} onChange={e=>setProgressForm(p=>({...p,note:e.target.value}))} placeholder="Faallo / Qiimeyn" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line,minHeight:90}}/>
@@ -3636,7 +3641,7 @@ function ExamsScreen() {
         <p className="text-xs mb-5" style={{color:COLORS.inkSoft}}>Haddii ardayga hore loogu qoray imtixaankan, natiijada waa la cusboonaysiinayaa.</p>
         <div className="space-y-4">
           <select value={resultForm.examId} onChange={e=>setResultForm(p=>({...p,examId:e.target.value}))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option value="">Dooro imtixaan...</option>{exams.map(e=><option key={e.id} value={e.id}>{e.name}{e.subject?` — ${e.subject}`:''}</option>)}</select>
-          <select value={resultForm.studentName} onChange={e=>setResultForm(p=>({...p,studentName:e.target.value}))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option value="">Dooro arday...</option>{students.map(s=><option key={s.id} value={s.name}>{s.name}{s.className?` — ${s.className}`:''}</option>)}</select>
+          <StudentSearchSelect students={students} value={resultForm.studentName} onChange={(v)=>setResultForm(p=>({...p,studentName:v}))} placeholder="Raadi magaca ardayga..." style={{borderColor:COLORS.line}} />
           <input type="number" min="0" value={resultForm.score} onChange={e=>setResultForm(p=>({...p,score:e.target.value}))} placeholder="Dhibcaha" required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}} />
           <textarea value={resultForm.note} onChange={e=>setResultForm(p=>({...p,note:e.target.value}))} placeholder="Faallo" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line,minHeight:90}} />
           <button disabled={saving || !exams.length || !students.length} className="w-full rounded-lg py-3 text-sm font-semibold" style={{backgroundColor:COLORS.teal,color:'#fff'}}>{saving?'Kaydinaya...':'Kaydi Natiijada'}</button>
@@ -3646,7 +3651,7 @@ function ExamsScreen() {
       {tab === "report" && <div className="max-w-3xl mx-auto">
         <div className="rounded-xl border p-5 mb-4" style={{borderColor:COLORS.line,backgroundColor:'#fff'}}>
           <div className="flex items-center justify-between gap-3 mb-4"><div><h3 className="font-semibold" style={{color:COLORS.ink,fontFamily:DISPLAY_FONT}}>Report Card</h3><p className="text-xs mt-1" style={{color:COLORS.inkSoft}}>Dooro arday si aad u aragto natiijooyinkiisa.</p></div><button type="button" onClick={()=>window.print()} className="rounded-lg px-4 py-2 text-sm font-semibold" style={{backgroundColor:COLORS.teal,color:'#fff'}}>🖨️ Daabac</button></div>
-          <select value={reportStudent} onChange={e=>setReportStudent(e.target.value)} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{borderColor:COLORS.line}}><option value="">Dooro arday...</option>{students.map(s=><option key={s.id} value={s.name}>{s.name}{s.className?` — ${s.className}`:''}</option>)}</select>
+          <StudentSearchSelect students={students} value={reportStudent} onChange={setReportStudent} placeholder="Raadi magaca ardayga..." style={{borderColor:COLORS.line}} />
         </div>
         {reportStudent && <div className="rounded-xl border overflow-hidden" style={{borderColor:COLORS.line,backgroundColor:'#fff'}}>
           <div className="p-5 border-b" style={{borderColor:COLORS.line}}><p className="text-lg font-semibold" style={{fontFamily:DISPLAY_FONT,color:COLORS.ink}}>{selectedReportStudent?.name || reportStudent}</p><p className="text-xs mt-1" style={{color:COLORS.inkSoft}}>{selectedReportStudent?.className || 'Fasalka lama gelin'}</p></div>
@@ -3740,10 +3745,7 @@ function QuranScreen() {
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Ardayga *</label>
-            <select value={form.studentName} onChange={(e) => setForm((p) => ({ ...p, studentName: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}>
-              <option value="">Dooro arday...</option>
-              {students.map((s) => <option key={s.id} value={s.name}>{s.name}{s.className ? ` — ${s.className}` : ""}</option>)}
-            </select>
+            <StudentSearchSelect students={students} value={form.studentName} onChange={(v) => setForm((p) => ({ ...p, studentName: v }))} placeholder="Raadi magaca ardayga..." style={{ borderColor: COLORS.line }} />
             {students.length === 0 && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Marka hore Ardayda ku dar arday.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -4927,7 +4929,7 @@ function AchievementsScreen() {
 
       {tab === "achievements" && <div className="rounded-2xl border overflow-hidden" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: COLORS.line }}><div><p className="font-semibold" style={{ color: COLORS.ink }}>Guulaha & Shahaadooyinka</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{achievements.length} diiwaan</p></div><Trophy size={20} style={{ color: COLORS.gold }} /></div>{achievements.length === 0 ? <EmptyState icon={Trophy} text="Wali guul lama diiwaangelin." /> : <div>{achievements.map((a) => <div key={a.id} className="flex items-center justify-between gap-3 px-5 py-4 border-b last:border-b-0" style={{ borderColor: COLORS.line }}><div><p className="font-semibold text-sm" style={{ color: COLORS.ink }}>{a.studentName}</p><p className="text-sm mt-1" style={{ color: COLORS.teal }}>{a.title}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{[a.type, fmtDate(a.date), a.note].filter(Boolean).join(" · ")}</p></div><button onClick={() => removeAchievement(a.id)} className="p-2 rounded-lg" style={{ color: COLORS.brick, backgroundColor: "#FDECEC" }}><Trash2 size={15} /></button></div>)}</div>}</div>}
 
-      {tab === "form" && <form onSubmit={addAchievement} className="max-w-2xl mx-auto rounded-2xl border p-5" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><h3 className="font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Diiwaangeli Guul</h3><p className="text-xs mb-5" style={{ color: COLORS.inkSoft }}>Tusaale: Shahaado, Tartanka Qur'aanka, Akhlaaq, Imaansho wanaagsan.</p><div className="space-y-4"><select value={form.studentName} onChange={(e) => setForm((p) => ({ ...p, studentName: e.target.value }))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}><option value="">Dooro arday...</option>{students.map((s) => <option key={s.id} value={s.name}>{s.name}{s.className ? ` — ${s.className}` : ""}</option>)}</select><input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} required placeholder="Magaca guusha / shahaadada *" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /><div className="grid md:grid-cols-2 gap-3"><select value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}><option>Shahaado</option><option>Tartan</option><option>Qur'aan</option><option>Akhlaaq</option><option>Imaansho</option><option>Kale</option></select><input type="date" value={form.date} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /></div><textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} placeholder="Faallo (ikhtiyaari)" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, minHeight: 90 }} /><button disabled={saving || !students.length} className="w-full rounded-lg py-3 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>{saving ? "Kaydinaya..." : "Kaydi Guusha"}</button>{!students.length && <p className="text-xs text-center" style={{ color: COLORS.inkSoft }}>Marka hore Ardayda ku dar arday.</p>}</div></form>}
+      {tab === "form" && <form onSubmit={addAchievement} className="max-w-2xl mx-auto rounded-2xl border p-5" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><h3 className="font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Diiwaangeli Guul</h3><p className="text-xs mb-5" style={{ color: COLORS.inkSoft }}>Tusaale: Shahaado, Tartanka Qur'aanka, Akhlaaq, Imaansho wanaagsan.</p><div className="space-y-4"><StudentSearchSelect students={students} value={form.studentName} onChange={(v) => setForm((p) => ({ ...p, studentName: v }))} placeholder="Raadi magaca ardayga..." style={{ borderColor: COLORS.line }} /><input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} required placeholder="Magaca guusha / shahaadada *" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /><div className="grid md:grid-cols-2 gap-3"><select value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}><option>Shahaado</option><option>Tartan</option><option>Qur'aan</option><option>Akhlaaq</option><option>Imaansho</option><option>Kale</option></select><input type="date" value={form.date} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /></div><textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} placeholder="Faallo (ikhtiyaari)" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, minHeight: 90 }} /><button disabled={saving || !students.length} className="w-full rounded-lg py-3 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>{saving ? "Kaydinaya..." : "Kaydi Guusha"}</button>{!students.length && <p className="text-xs text-center" style={{ color: COLORS.inkSoft }}>Marka hore Ardayda ku dar arday.</p>}</div></form>}
     </div>
   );
 }
@@ -5420,10 +5422,22 @@ useEffect(() => {
       html, body, #root { min-height: 100%; width: 100%; }
       * { box-sizing: border-box; }
       button, input, select, textarea { font-size: 16px; }
+      input, select, textarea { max-width: 100%; }
+      button, [role="button"], input, select { touch-action: manipulation; }
+      :focus-visible { outline: 3px solid ${COLORS.gold}; outline-offset: 2px; }
       @media (max-width: 768px) {
-        .nibraas-mobile-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        table { min-width: 640px; }
+        body { overflow-x: hidden; }
+        main, aside, section { min-width: 0; }
+        .nibraas-mobile-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        table { min-width: 600px; }
         .nibraas-mobile-card { width: 100% !important; max-width: 100% !important; }
+        button { min-height: 40px; }
+        input, select, textarea { min-width: 0; }
+        .grid { grid-template-columns: minmax(0, 1fr) !important; }
+      }
+      @media (max-width: 420px) {
+        table { min-width: 560px; }
+        h1 { overflow-wrap: anywhere; }
       }
     `;
     document.head.appendChild(style);
@@ -5882,6 +5896,27 @@ useEffect(() => {
                 <button onClick={() => setMoreOpen(false)}>
                   <X size={18} style={{ color: COLORS.inkSoft }} />
                 </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+                <div>
+                  <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.ink }}>{tr.branch}</label>
+                  <select value={activeBranchId} onChange={(e) => switchBranch(e.target.value)} aria-label={tr.branch} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, color: COLORS.ink, backgroundColor: "#fff" }}>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <button type="button" onClick={() => setShowBranchManager((v) => !v)} className="mt-2 text-sm font-semibold" style={{ color: COLORS.teal }}>{tr.branches} · {tr.addBranch}</button>
+                  {showBranchManager && (
+                    <div className="mt-2 rounded-lg border p-3 space-y-2" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
+                      {branches.map((b) => <div key={b.id} className="flex items-center justify-between text-sm"><span>{b.name}</span><button type="button" onClick={() => switchBranch(b.id)} className="font-semibold" style={{ color: COLORS.teal }}>{activeBranchId === b.id ? "✓" : tr.branch}</button></div>)}
+                      <div className="flex gap-2"><input value={newBranchName} onChange={(e) => setNewBranchName(e.target.value)} placeholder={tr.branchName} className="min-w-0 flex-1 rounded-lg border px-2 py-2 text-sm" style={{ borderColor: COLORS.line }} /><button type="button" onClick={() => { const name = newBranchName.trim(); if (!name) return; const id = "branch-" + Date.now(); setBranches((prev) => [...prev, { id, name }]); switchBranch(id); setNewBranchName(""); }} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>+</button></div>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1" style={{ color: COLORS.ink }}>{tr.language}</label>
+                  <select value={language} onChange={(e) => setLanguage(e.target.value)} aria-label={tr.language} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, color: COLORS.ink, backgroundColor: "#fff" }}>
+                    <option value="so">🇸🇴 Somali</option><option value="ar">🇸🇦 العربية</option><option value="en">🇬🇧 English</option>
+                  </select>
+                </div>
               </div>
               <div className="grid grid-cols-4 gap-4">
                 {moreItems.map((n) => (
