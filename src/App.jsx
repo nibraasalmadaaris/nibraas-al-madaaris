@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v32 — Nidaamka Maareynta Madrasada
+   NIBRAAS v33 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -75,6 +75,62 @@ function notify(message, type = "info") {
     // Never let a notification failure break the app.
     console.warn(message);
   }
+}
+
+/* ---------- confirmation dialog (replaces blocking window.confirm) ----------
+   Usage: if (!(await askConfirm("Ma hubtaa?", { confirmLabel: "Tirtir", danger: true }))) return; */
+function askConfirm(message, opts = {}) {
+  const { confirmLabel = "Haa, sii wad", cancelLabel = "Maya", danger = false } = opts;
+  return new Promise((resolve) => {
+    if (typeof document === "undefined") { resolve(false); return; }
+    const previouslyFocused = document.activeElement;
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.5);";
+    const box = document.createElement("div");
+    box.setAttribute("role", "alertdialog");
+    box.setAttribute("aria-modal", "true");
+    box.style.cssText = `width:100%;max-width:420px;background:#fff;border-radius:16px;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,.35);font-family:${BODY_FONT};`;
+    const text = document.createElement("p");
+    text.textContent = String(message ?? "");
+    text.style.cssText = `margin:0 0 20px;font-size:15px;line-height:1.5;color:${COLORS.ink};white-space:pre-line;`;
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:10px;justify-content:flex-end;";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.textContent = cancelLabel;
+    cancelBtn.style.cssText = `padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;border:1px solid ${COLORS.line};background:#fff;color:${COLORS.ink};`;
+    const okBtn = document.createElement("button");
+    okBtn.type = "button";
+    okBtn.textContent = confirmLabel;
+    okBtn.style.cssText = `padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;border:none;background:${danger ? COLORS.brick : COLORS.teal};color:#fff;`;
+    row.append(cancelBtn, okBtn);
+    box.append(text, row);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      try { previouslyFocused?.focus?.(); } catch { /* ignore */ }
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      else if (e.key === "Tab") {
+        // keep focus inside the dialog
+        e.preventDefault();
+        (document.activeElement === cancelBtn ? okBtn : cancelBtn).focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    cancelBtn.addEventListener("click", () => finish(false));
+    okBtn.addEventListener("click", () => finish(true));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) finish(false); });
+    cancelBtn.focus(); // safe default: Enter/Space will not confirm a destructive action
+  });
 }
 
 /* ---------- error boundary: one broken screen must not blank the whole app ---------- */
@@ -1141,7 +1197,7 @@ function InvoicesScreen({ config, tr }) {
   };
 
   const removeInvoice = async (invoice) => {
-    if (!window.confirm(`Ma tirtirtaa biilka ${invoice.id}?`)) return;
+    if (!(await askConfirm(`Ma tirtirtaa biilka ${invoice.id}?`, { confirmLabel: "Tirtir", danger: true }))) return;
     await persist(invoices.filter((x) => x.id !== invoice.id));
   };
 
@@ -1277,7 +1333,7 @@ function FinanceScreen({ config }) {
   };
 
   const deleteTxn = async (txn) => {
-    if (!window.confirm(`Ma hubtaa inaad tirtirto diiwaanka ${txn.studentName || "lacagta"}?`)) return;
+    if (!(await askConfirm(`Ma hubtaa inaad tirtirto diiwaanka ${txn.studentName || "lacagta"}?`, { confirmLabel: "Tirtir", danger: true }))) return;
     await persist(txns.filter(t => String(t.id) !== String(txn.id)));
   };
 
@@ -2835,9 +2891,10 @@ const restoreBackup = async (event) => {
       };
     });
 
-    const confirmed = window.confirm(
+    const confirmed = await askConfirm(
       `Backup-kan wuxuu ka kooban yahay ${rowsToRestore.length} qaybood oo xog ah.\n\n` +
-      "Xogta leh furayaal isku mid ah waa la cusboonaysiin karaa. Hubi inaad haysato backup cusub ka hor intaadan sii wadin.\n\nMa sii wadeysaa?"
+      "Xogta leh furayaal isku mid ah waa la cusboonaysiin karaa. Hubi inaad haysato backup cusub ka hor intaadan sii wadin.\n\nMa sii wadeysaa?",
+      { confirmLabel: "Restore", danger: true }
     );
     if (!confirmed) return;
 
@@ -4364,7 +4421,7 @@ function ScheduleScreen() {
   };
 
   const removeItem = async (id) => {
-    if (!window.confirm("Ma hubtaa inaad ka saarto casharkan jadwalka?")) return;
+    if (!(await askConfirm("Ma hubtaa inaad ka saarto casharkan jadwalka?", { confirmLabel: "Ka saar", danger: true }))) return;
     await persist(items.filter((it) => it.id !== id));
     if (editingId === id) resetForm();
   };
@@ -4639,7 +4696,7 @@ function DailyScheduleScreen() {
   };
 
   const removeTask = async (id) => {
-    if (!window.confirm("Ma hubtaa inaad tirtirto hawshan?")) return;
+    if (!(await askConfirm("Ma hubtaa inaad tirtirto hawshan?", { confirmLabel: "Tirtir", danger: true }))) return;
     await persistTasks(tasks.filter((t) => t.id !== id));
   };
 
