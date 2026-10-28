@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v33 — Nidaamka Maareynta Madrasada
+   NIBRAAS v34 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -66,11 +66,18 @@ function notify(message, type = "info") {
     el.style.cssText = `max-width:480px;padding:12px 16px;border-radius:12px;font:600 14px/1.4 ${BODY_FONT};background:${palette.bg};color:${palette.fg};box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:auto;opacity:0;transition:opacity .2s;`;
     host.appendChild(el);
     requestAnimationFrame(() => { el.style.opacity = "1"; });
-    const ms = type === "error" ? 6000 : 3500;
-    setTimeout(() => {
+    const dismiss = () => {
       el.style.opacity = "0";
       setTimeout(() => el.remove(), 250);
-    }, ms);
+    };
+    if (type === "error") {
+      // Errors stay until tapped so the full message can be read.
+      el.textContent = String(message ?? "") + "  (taabo si aad u xidho)";
+      el.style.cursor = "pointer";
+      el.addEventListener("click", dismiss);
+    } else {
+      setTimeout(dismiss, 3500);
+    }
   } catch {
     // Never let a notification failure break the app.
     console.warn(message);
@@ -80,7 +87,7 @@ function notify(message, type = "info") {
 /* ---------- confirmation dialog (replaces blocking window.confirm) ----------
    Usage: if (!(await askConfirm("Ma hubtaa?", { confirmLabel: "Tirtir", danger: true }))) return; */
 function askConfirm(message, opts = {}) {
-  const { confirmLabel = "Haa, sii wad", cancelLabel = "Maya", danger = false } = opts;
+  const { confirmLabel = "Haa, sii wad", cancelLabel = "Maya", danger = false, showCancel = true } = opts;
   return new Promise((resolve) => {
     if (typeof document === "undefined") { resolve(false); return; }
     const previouslyFocused = document.activeElement;
@@ -103,7 +110,8 @@ function askConfirm(message, opts = {}) {
     okBtn.type = "button";
     okBtn.textContent = confirmLabel;
     okBtn.style.cssText = `padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;border:none;background:${danger ? COLORS.brick : COLORS.teal};color:#fff;`;
-    row.append(cancelBtn, okBtn);
+    if (showCancel) row.append(cancelBtn);
+    row.append(okBtn);
     box.append(text, row);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -122,14 +130,14 @@ function askConfirm(message, opts = {}) {
       else if (e.key === "Tab") {
         // keep focus inside the dialog
         e.preventDefault();
-        (document.activeElement === cancelBtn ? okBtn : cancelBtn).focus();
+        if (showCancel) (document.activeElement === cancelBtn ? okBtn : cancelBtn).focus();
       }
     };
     document.addEventListener("keydown", onKey, true);
     cancelBtn.addEventListener("click", () => finish(false));
     okBtn.addEventListener("click", () => finish(true));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) finish(false); });
-    cancelBtn.focus(); // safe default: Enter/Space will not confirm a destructive action
+    (showCancel ? cancelBtn : okBtn).focus(); // safe default: Enter/Space will not confirm a destructive action
   });
 }
 
@@ -2907,7 +2915,8 @@ const restoreBackup = async (event) => {
     window.location.reload();
   } catch (error) {
     console.error("Restore error:", error);
-    notify(`Restore-ku wuu fashilmay: ${error?.message || "Hubi backup file-ka iyo xiriirka Supabase."}`, "error");
+    const detail = [error?.message, error?.details, error?.hint, error?.code ? `(code: ${error.code})` : ""].filter(Boolean).join("\n") || "Hubi backup file-ka iyo xiriirka Supabase.";
+    await askConfirm(`Restore-ku wuu fashilmay.\n\n${detail}`, { confirmLabel: "Hagaag", showCancel: false, danger: true });
   } finally {
     setRestoreLoading(false);
   }
