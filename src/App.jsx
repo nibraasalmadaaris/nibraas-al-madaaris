@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v31 — Nidaamka Maareynta Madrasada
+   NIBRAAS v32 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -42,6 +42,89 @@ function useBrandFonts() {
 }
 const DISPLAY_FONT = "'Fraunces', serif";
 const BODY_FONT = "'Manrope', sans-serif";
+
+/* ---------- toast notifications (replaces blocking notify()) ---------- */
+function notify(message, type = "info") {
+  try {
+    if (typeof document === "undefined") return;
+    let host = document.getElementById("nibraas-toast-host");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "nibraas-toast-host";
+      host.setAttribute("role", "status");
+      host.setAttribute("aria-live", "polite");
+      host.style.cssText = "position:fixed;left:0;right:0;bottom:84px;z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 16px;pointer-events:none;";
+      document.body.appendChild(host);
+    }
+    const palette = {
+      info: { bg: COLORS.tealDeep, fg: "#fff" },
+      success: { bg: COLORS.tealLight, fg: "#fff" },
+      error: { bg: COLORS.brick, fg: "#fff" },
+    }[type] || { bg: COLORS.tealDeep, fg: "#fff" };
+    const el = document.createElement("div");
+    el.textContent = String(message ?? "");
+    el.style.cssText = `max-width:480px;padding:12px 16px;border-radius:12px;font:600 14px/1.4 ${BODY_FONT};background:${palette.bg};color:${palette.fg};box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:auto;opacity:0;transition:opacity .2s;`;
+    host.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = "1"; });
+    const ms = type === "error" ? 6000 : 3500;
+    setTimeout(() => {
+      el.style.opacity = "0";
+      setTimeout(() => el.remove(), 250);
+    }, ms);
+  } catch {
+    // Never let a notification failure break the app.
+    console.warn(message);
+  }
+}
+
+/* ---------- error boundary: one broken screen must not blank the whole app ---------- */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("NIBRAAS UI error:", error, info);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6" style={{ backgroundColor: COLORS.sand, fontFamily: BODY_FONT }}>
+        <div className="max-w-md w-full rounded-2xl border p-6 text-center" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
+          <p className="text-lg font-semibold mb-2" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Wax khalad ah ayaa dhacay</p>
+          <p className="text-sm mb-5" style={{ color: COLORS.inkSoft }}>Xogtaada waa badbaadsan tahay. Fadlan dib u cusboonaysii bogga. Haddii dhibaatadu sii socoto, la xiriir maamulka.</p>
+          <button type="button" onClick={() => window.location.reload()} className="rounded-xl px-5 py-2.5 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>Dib u cusboonaysii</button>
+        </div>
+      </div>
+    );
+  }
+}
+
+/* ---------- idle session timeout (security) ---------- */
+const IDLE_LOGOUT_MS = 30 * 60 * 1000; // 30 minutes
+function useIdleLogout(enabled) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let timer = null;
+    const reset = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        notify("Waa laguu saaray sababta oo ah waqti dheer ayaan wax la samayn.", "info");
+        supabase.auth.signOut();
+      }, IDLE_LOGOUT_MS);
+    };
+    const events = ["mousemove", "keydown", "click", "touchstart", "scroll"];
+    events.forEach((ev) => window.addEventListener(ev, reset, { passive: true }));
+    reset();
+    return () => {
+      if (timer) clearTimeout(timer);
+      events.forEach((ev) => window.removeEventListener(ev, reset));
+    };
+  }, [enabled]);
+}
 
 /* Searchable student picker shared by every student-selection field. */
 function StudentSearchSelect({ students = [], value = "", onChange, placeholder = "Raadi magaca ardayga...", allowAll = false, allLabel = "Dhammaan", valueKey = "name", className = "w-full rounded-lg border px-3 py-2.5 text-sm", style = {} }) {
@@ -1998,11 +2081,11 @@ function ParentCommunicationScreen() {
       message: "Waxaan ku wargelinaynaa in ardayga maanta lagu diiwaangeliyey maqnaansho.",
       status: "La diyaariyey", createdAt: new Date().toISOString(), automated: true,
     }));
-    if (!alerts.length) { alert("Maanta lama helin maqnaansho si alert loogu sameeyo."); return; }
+    if (!alerts.length) { notify("Maanta lama helin maqnaansho si alert loogu sameeyo."); return; }
     const next = [...alerts, ...logs];
     setLogs(next);
     await saveArr("parent-communication-log", next);
-    alert(`${alerts.length} ogeysiis waalid ayaa la diyaariyey.`);
+    notify(`${alerts.length} ogeysiis waalid ayaa la diyaariyey.`, "success");
     setMode("history");
   };
 
@@ -2339,7 +2422,7 @@ function ReportsScreen({ config }) {
       <div class="card"><div class="label">Mushahar</div><div class="value">${money(payrollTotal)}</div></div>
     </div><div class="footer">NIBRAAS — Nidaamka Maareynta Madrasada</div></body></html>`;
     const win = window.open("", "_blank");
-    if (!win) { alert("Fadlan ogolow popup-ka browser-ka."); return; }
+    if (!win) { notify("Fadlan ogolow popup-ka browser-ka.", "error"); return; }
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -2621,7 +2704,7 @@ const downloadBackup = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
     console.error("Backup error:", error);
-    alert("Backup-ka lama soo dejisan.");
+    notify("Backup-ka lama soo dejisan.", "error");
   } finally {
     setBackupLoading(false);
   }
@@ -2633,7 +2716,7 @@ const restoreBackup = async (event) => {
   if (!file) return;
 
   if (!file.name.toLowerCase().endsWith(".json") || file.size <= 0 || file.size > 50 * 1024 * 1024) {
-    alert("Faylka backup-ku waa inuu noqdaa JSON sax ah oo ka yar 50 MB.");
+    notify("Faylka backup-ku waa inuu noqdaa JSON sax ah oo ka yar 50 MB.", "error");
     return;
   }
 
@@ -2767,7 +2850,7 @@ const restoreBackup = async (event) => {
     window.location.reload();
   } catch (error) {
     console.error("Restore error:", error);
-    alert(`Restore-ku wuu fashilmay: ${error?.message || "Hubi backup file-ka iyo xiriirka Supabase."}`);
+    notify(`Restore-ku wuu fashilmay: ${error?.message || "Hubi backup file-ka iyo xiriirka Supabase."}`, "error");
   } finally {
     setRestoreLoading(false);
   }
@@ -4562,14 +4645,14 @@ function DailyScheduleScreen() {
 
   const enableNotifications = async () => {
     if (!("Notification" in window)) {
-      alert("Browser-kan ma taageero ogeysiisyada.");
+      notify("Browser-kan ma taageero ogeysiisyada.");
       return;
     }
     try {
       const result = await Notification.requestPermission();
-      alert(result === "granted" ? "Ogeysiisyada browser-ka waa la oggolaaday." : "Ogeysiisyada lama oggola.");
+      notify(result === "granted" ? "Ogeysiisyada browser-ka waa la oggolaaday." : "Ogeysiisyada lama oggola.");
     } catch {
-      alert("Ogeysiisyada lama diyaarin.");
+      notify("Ogeysiisyada lama diyaarin.", "error");
     }
   };
 
@@ -5157,7 +5240,7 @@ function ProductionReadinessScreen({ session, currentRole, tenantReady, tenantEr
   );
 }
 
-export default function App() {
+function AppInner() {
   const [session, setSession] = useState(null);
   const [isRecovery, setIsRecovery] = useState(false);
 const [authLoading, setAuthLoading] = useState(true);
@@ -5165,6 +5248,7 @@ const [authLoading, setAuthLoading] = useState(true);
   const [roleLoading, setRoleLoading] = useState(true);
   const [tenantReady, setTenantReady] = useState(false);
   const [tenantError, setTenantError] = useState("");
+  useIdleLogout(Boolean(session?.user?.id));
 
 useEffect(() => {
   let mounted = true;
@@ -5941,6 +6025,11 @@ useEffect(() => {
   );
 }
 
-
-
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
+  );
+}
 
