@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v34 — Nidaamka Maareynta Madrasada
+   NIBRAAS v35 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -2838,8 +2838,7 @@ const restoreBackup = async (event) => {
         return !hasScopedReplacement;
       });
 
-    const seenKeys = new Set();
-    const rowsToRestore = restoreSourceRows.map(({ row, index }) => {
+    const mappedRows = restoreSourceRows.map(({ row, index }) => {
       if (!row || typeof row.key !== "string" || !row.key.trim()) {
         throw new Error(`Furaha xogta safka ${index + 1} waa khaldan yahay.`);
       }
@@ -2882,13 +2881,6 @@ const restoreBackup = async (event) => {
       if (!physicalKey) {
         throw new Error(`Furaha xogta safka ${index + 1} lama diyaarin karin.`);
       }
-      if (seenKeys.has(physicalKey)) {
-        throw new Error(
-          `Backup-ku wuxuu leeyahay furayaal is-dul-saaran: ${logicalKey}. Waxba lama beddelin. Samee Backup cusub oo qaabkiisa cusub ah kadib marka cusboonaysiintu diyaar noqoto.`
-        );
-      }
-      seenKeys.add(physicalKey);
-
       return {
         key: physicalKey,
         tenant_id: CURRENT_TENANT_ID,
@@ -2899,9 +2891,29 @@ const restoreBackup = async (event) => {
       };
     });
 
+    // Some backups hold two rows that map to the same key once the old tenant
+    // prefix is replaced (e.g. a pre-migration row and a current row). Keep the
+    // newest row (ties: the larger value) instead of aborting, and tell the user.
+    const byKey = new Map();
+    const duplicateKeys = [];
+    for (const r of mappedRows) {
+      const prev = byKey.get(r.key);
+      if (!prev) { byKey.set(r.key, r); continue; }
+      duplicateKeys.push(r.key);
+      const tNew = Date.parse(r.updated_at) || 0;
+      const tOld = Date.parse(prev.updated_at) || 0;
+      const sizeNew = JSON.stringify(r.value ?? null).length;
+      const sizeOld = JSON.stringify(prev.value ?? null).length;
+      if (tNew > tOld || (tNew === tOld && sizeNew > sizeOld)) byKey.set(r.key, r);
+    }
+    const rowsToRestore = Array.from(byKey.values());
+    const duplicateNote = duplicateKeys.length
+      ? `\n\nTaxaddar: ${duplicateKeys.length} safood oo is-dul-saaran ayaa la helay (tus: ${duplicateKeys.slice(0, 3).map((k) => k.split(":").slice(2).join(":") || k).join(", ")}). Kan ugu cusub ee updated_at ayaa la dhigayaa.`
+      : "";
+
     const confirmed = await askConfirm(
       `Backup-kan wuxuu ka kooban yahay ${rowsToRestore.length} qaybood oo xog ah.\n\n` +
-      "Xogta leh furayaal isku mid ah waa la cusboonaysiin karaa. Hubi inaad haysato backup cusub ka hor intaadan sii wadin.\n\nMa sii wadeysaa?",
+      "Xogta leh furayaal isku mid ah waa la cusboonaysiin karaa. Hubi inaad haysato backup cusub ka hor intaadan sii wadin." + duplicateNote + "\n\nMa sii wadeysaa?",
       { confirmLabel: "Restore", danger: true }
     );
     if (!confirmed) return;
