@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v36 — Nidaamka Maareynta Madrasada
+   NIBRAAS v38 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -42,6 +42,92 @@ function useBrandFonts() {
 }
 const DISPLAY_FONT = "'Fraunces', serif";
 const BODY_FONT = "'Manrope', sans-serif";
+
+/* Canonical form used to decide whether two spellings are the same class or the same person.
+   "Al-maahiruun", "Al-maahiruun ", "Al-Maahiruun" and "Al maahiruun" all become "al maahiruun". */
+function textKey(v) {
+  return String(v ?? "")
+    .normalize("NFKD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[‐-―_-]+/g, " ")
+    .replace(/['‘’`´]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+const classKey = textKey;
+function sameText(a, b) {
+  const ka = textKey(a);
+  return ka !== "" && ka === textKey(b);
+}
+const sameClass = sameText;
+
+/* Groups spelling variants of class names. An official name from the Classes screen wins as the
+   label; otherwise the most common spelling among students is used. */
+function buildClassIndex(students = [], officialClasses = []) {
+  const groups = new Map();
+  (officialClasses || []).forEach((c) => {
+    const label = cleanText(String(c?.name ?? ""));
+    const k = classKey(label);
+    if (k && !groups.has(k)) groups.set(k, { label, official: true, counts: new Map() });
+  });
+  (students || []).forEach((s) => {
+    const raw = cleanText(String(s?.className ?? s?.class ?? s?.fasal ?? ""));
+    const k = classKey(raw);
+    if (!k) return;
+    let g = groups.get(k);
+    if (!g) { g = { label: raw, official: false, counts: new Map() }; groups.set(k, g); }
+    g.counts.set(raw, (g.counts.get(raw) || 0) + 1);
+  });
+  groups.forEach((g) => {
+    if (!g.official && g.counts.size) g.label = Array.from(g.counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
+  });
+  const labels = Array.from(groups.values()).map((g) => g.label).sort((a, b) => a.localeCompare(b));
+  const labelOf = (name) => groups.get(classKey(name))?.label ?? cleanText(String(name ?? ""));
+  return { labels, labelOf };
+}
+
+/* ---------- input cleaning & validation ---------- */
+const cleanText = (v) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : v);
+
+function isValidISODate(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) return false;
+  const year = Number(v.slice(0, 4));
+  return year >= 2000 && year <= 2100;
+}
+
+function isValidPhone(v) {
+  const digits = String(v ?? "").replace(/[\s\-().]/g, "");
+  return /^\+?\d{7,15}$/.test(digits);
+}
+
+/* Returns an error message in Somali, or "" when the value is acceptable. */
+function validateField(field, raw) {
+  const type = field.type;
+  const value = typeof raw === "string" ? cleanText(raw) : raw;
+  const empty = value === undefined || value === null || value === "";
+  if (empty) return field.required ? "Goobtan waa lagama maarmaan." : "";
+  if (type === "tel" && !isValidPhone(value)) return "Lambarka taleefanka ma saxna (7 ilaa 15 lambar).";
+  if (type === "date" && !isValidISODate(String(value))) return "Taariikhda ma saxna.";
+  if (type === "number") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "Geli lambar sax ah.";
+    const min = field.min ?? 0;
+    if (n < min) return `Lambarku waa inuusan ka yaraan ${min}.`;
+    if (field.max !== undefined && n > field.max) return `Lambarku waa inuusan ka badnaan ${field.max}.`;
+  }
+  return "";
+}
+
+/* Positive money amount check shared by finance, invoices and payroll. */
+function validateAmount(raw, { allowZero = false, max = 1000000 } = {}) {
+  const n = Number(raw);
+  if (raw === "" || raw === null || raw === undefined || !Number.isFinite(n)) return "Geli qadar sax ah.";
+  if (n < 0 || (!allowZero && n === 0)) return allowZero ? "Qadarku ma noqon karo mid taban." : "Qadarku waa inuu ka weyn yahay 0.";
+  if (n > max) return `Qadarku waa inuusan ka badnaan ${max.toLocaleString()}.`;
+  return "";
+}
 
 /* ---------- toast notifications (replaces blocking notify()) ---------- */
 function notify(message, type = "info") {
@@ -272,7 +358,7 @@ async function loadObj(key, fallback) {
 
 async function saveObj(key, obj) {
   const physicalKey = physicalStorageKey(key);
-  if (!physicalKey || !CURRENT_TENANT_ID) return;
+  if (!physicalKey || !CURRENT_TENANT_ID) return false;
   const branchId = isGlobalStorageKey(key) ? "__global__" : (CURRENT_BRANCH_ID || "main");
   try {
     const { error } = await supabase
@@ -287,9 +373,11 @@ async function saveObj(key, obj) {
         },
         { onConflict: "key" }
       );
-    if (error) console.error("Storage error:", error);
+    if (error) { console.error("Storage error:", error); return false; }
+    return true;
   } catch (e) {
     console.error("Storage error:", e);
+    return false;
   }
 }
 async function saveArr(key, arr) {
@@ -632,7 +720,7 @@ const ENTITY_SCHEMAS = {
     fields: [
       { key: "name", label: "Magaca oo Buuxa", type: "text", required: true },
       { key: "className", label: "Fasalka", type: "text" },
-      { key: "age", label: "Da'da", type: "number" },
+      { key: "age", label: "Da'da", type: "number", min: 1, max: 120 },
       { key: "gender", label: "Jinsiga", type: "select", options: ["Lab", "Dhedig"] },
       { key: "parentName", label: "Magaca Waalidka", type: "text" },
       { key: "parentPhone", label: "Lambarka Waalidka", type: "tel" },
@@ -662,7 +750,7 @@ const ENTITY_SCHEMAS = {
       { key: "name", label: "Magaca Fasalka", type: "text", required: true },
       { key: "teacher", label: "Macalinka Mas'uulka ah", type: "text" },
       { key: "schedule", label: "Jadwalka (tusaale: Aroornimo 8-10)", type: "text" },
-      { key: "capacity", label: "Tirada Ardayda ee la ogol yahay", type: "number" },
+      { key: "capacity", label: "Tirada Ardayda ee la ogol yahay", type: "number", min: 1, max: 1000 },
     ],
     display: (it) => ({ title: it.name, sub: [it.teacher, it.schedule].filter(Boolean).join(" · ") }),
   },
@@ -701,7 +789,7 @@ const ENTITY_SCHEMAS = {
       { key: "studentName", label: "Magaca Ardayga", type: "text", required: true },
       { key: "subject", label: "Maadada", type: "text" },
       { key: "term", label: "Semesterka", type: "select", options: ["Semester 1", "Semester 2"] },
-      { key: "score", label: "Dhibcaha", type: "number" },
+      { key: "score", label: "Dhibcaha", type: "number", min: 0, max: 100 },
       { key: "note", label: "Fallanqayn gaaban", type: "text" },
     ],
     display: (it) => ({ title: it.studentName, sub: [it.subject, it.score != null ? `${it.score}%` : ""].filter(Boolean).join(" · ") }),
@@ -716,7 +804,7 @@ const ENTITY_SCHEMAS = {
       { key: "subject", label: "Maadada", type: "text" },
       { key: "className", label: "Fasalka", type: "text" },
       { key: "date", label: "Taariikhda", type: "date" },
-      { key: "maxScore", label: "Ugu badnaan Dhibcaha", type: "number" },
+      { key: "maxScore", label: "Ugu badnaan Dhibcaha", type: "number", min: 1, max: 1000 },
     ],
     display: (it) => ({ title: it.name, sub: [it.className, fmtDate(it.date)].filter(Boolean).join(" · ") }),
   },
@@ -754,45 +842,63 @@ const PRIMARY_TABS = ["home", "students", "attendance", "finance"];
 /* =========================================================
    Generic form field
 ========================================================= */
-function FormField({ field, value, onChange }) {
+function FormField({ field, value, onChange, error }) {
   const base =
     "w-full rounded-lg border px-3 py-2.5 text-sm outline-none transition focus:ring-2";
-  const style = { borderColor: COLORS.line, fontFamily: BODY_FONT };
+  const style = { borderColor: error ? COLORS.brick : COLORS.line, fontFamily: BODY_FONT };
+  const errorId = `err-${field.key}`;
+  const common = {
+    className: base,
+    style: { ...style, "--tw-ring-color": COLORS.gold },
+    "aria-invalid": error ? "true" : undefined,
+    "aria-describedby": error ? errorId : undefined,
+  };
+  const errorNode = error ? (
+    <p id={errorId} role="alert" className="mt-1 text-xs font-medium" style={{ color: COLORS.brick }}>{error}</p>
+  ) : null;
   if (field.type === "select") {
     return (
-      <select
-        className={base}
-        style={{ ...style, "--tw-ring-color": COLORS.gold }}
-        value={value || ""}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">Dooro...</option>
-        {field.options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
+      <>
+        <select {...common} value={value || ""} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Dooro...</option>
+          {field.options.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        {errorNode}
+      </>
     );
   }
   if (field.type === "textarea") {
     return (
-      <textarea
-        className={base}
-        style={{ ...style, "--tw-ring-color": COLORS.gold, minHeight: 80 }}
-        value={value || ""}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <>
+        <textarea
+          {...common}
+          style={{ ...common.style, minHeight: 80 }}
+          maxLength={2000}
+          value={value || ""}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {errorNode}
+      </>
     );
   }
   return (
-    <input
-      type={field.type}
-      className={base}
-      style={{ ...style, "--tw-ring-color": COLORS.gold }}
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-    />
+    <>
+      <input
+        {...common}
+        type={field.type}
+        inputMode={field.type === "tel" ? "tel" : field.type === "number" ? "decimal" : undefined}
+        min={field.type === "number" ? (field.min ?? 0) : undefined}
+        max={field.type === "number" ? field.max : undefined}
+        maxLength={field.type === "text" || field.type === "tel" ? 200 : undefined}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {errorNode}
+    </>
   );
 }
 
@@ -807,6 +913,7 @@ function EntityScreen({ schema }) {
   const [formData, setFormData] = useState({});
   const [search, setSearch] = useState("");
   const [confirmId, setConfirmId] = useState(null);
+  const [errors, setErrors] = useState({});
 
   const storeKey = `${schema.key}-data`;
 
@@ -831,26 +938,51 @@ const persist = async (next) => {
 
   const openNew = () => {
     setFormData({});
+    setErrors({});
     setEditingId(null);
     setView("form");
   };
   const openEdit = (it) => {
     setFormData(it);
+    setErrors({});
     setEditingId(it.id);
     setView("form");
   };
   const submit = async (e) => {
     e.preventDefault();
-    const required = schema.fields.filter((f) => f.required);
-    for (const f of required) {
-      if (!formData[f.key]) return;
+    const nextErrors = {};
+    for (const f of schema.fields) {
+      const msg = validateField(f, formData[f.key]);
+      if (msg) nextErrors[f.key] = msg;
+    }
+    if (Object.keys(nextErrors).length) {
+      setErrors(nextErrors);
+      notify("Fadlan sax goobaha casaanka ah.", "error");
+      return;
+    }
+    // Trim stray spaces from text-like fields so the same value is never stored two ways
+    // (e.g. a class name with a trailing space).
+    const cleaned = { ...formData };
+    for (const f of schema.fields) {
+      if (["text", "textarea", "tel"].includes(f.type)) cleaned[f.key] = cleanText(cleaned[f.key]);
+    }
+    if (cleaned.className && schema.fields.some((f) => f.key === "className")) {
+      // Use the official spelling from the Classes screen so "al maahiruun" is stored as "Al-maahiruun".
+      const official = await loadArr("classes-data");
+      const hit = official.find((c) => sameClass(c.name, cleaned.className));
+      if (hit) cleaned.className = cleanText(String(hit.name));
+    }
+    if (schema.key === "students" && !editingId) {
+      const same = items.some((it) => sameText(it.name, cleaned.name) && sameClass(it.className, cleaned.className));
+      if (same && !(await askConfirm(`Arday magaca "${cleaned.name}" leh ayaa horey fasalkan ugu jira. Ma sii wadaa oo ma ku darta mar kale?`, { confirmLabel: "Haa, ku dar" }))) return;
     }
     if (editingId) {
-      await persist(items.map((it) => (it.id === editingId ? { ...it, ...formData } : it)));
+      await persist(items.map((it) => (it.id === editingId ? { ...it, ...cleaned } : it)));
     } else {
-      const newItem = { ...formData, id: Date.now(), createdAt: new Date().toISOString() };
+      const newItem = { ...cleaned, id: Date.now(), createdAt: new Date().toISOString() };
       await persist([newItem, ...items]);
     }
+    setErrors({});
     setView("list");
   };
   const remove = async (id) => {
@@ -897,7 +1029,11 @@ const persist = async (next) => {
               <FormField
                 field={f}
                 value={formData[f.key]}
-                onChange={(v) => setFormData((p) => ({ ...p, [f.key]: v }))}
+                error={errors[f.key]}
+                onChange={(v) => {
+                  setFormData((p) => ({ ...p, [f.key]: v }));
+                  if (errors[f.key]) setErrors((p) => ({ ...p, [f.key]: undefined }));
+                }}
               />
             </div>
           ))}
@@ -1008,36 +1144,52 @@ function EmptyState({ icon: Icon, text }) {
 ========================================================= */
 function AttendanceScreen() {
   const [students, setStudents] = useState([]);
+  const [officialClasses, setOfficialClasses] = useState([]);
   const [date, setDate] = useState(todayISO());
   const [className, setClassName] = useState("Dhammaan");
   const [marks, setMarks] = useState({});
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [variantRecs, setVariantRecs] = useState([]); // same class saved under a different spelling
 
   useEffect(() => {
-    loadArr("students-data").then((arr) => {
+    Promise.all([loadArr("students-data"), loadArr("classes-data")]).then(([arr, cls]) => {
       setStudents(arr);
+      setOfficialClasses(cls);
       setLoading(false);
     });
   }, []);
 
-  const classOptions = ["Dhammaan", ...Array.from(new Set(students.map((s) => s.className).filter(Boolean)))];
-  const roster = className === "Dhammaan" ? students : students.filter((s) => s.className === className);
+  const classIndex = buildClassIndex(students, officialClasses);
+  const classOptions = ["Dhammaan", ...classIndex.labels];
+  const roster = className === "Dhammaan" ? students : students.filter((s) => sameClass(s.className, className));
 
   const attKey = `attendance-${date}__${className}`;
   useEffect(() => {
     let alive = true;
-    loadObj(attKey, null).then((rec) => {
-      if (!alive) return;
-      if (rec && rec.records) {
-        const m = {};
-        rec.records.forEach((r) => (m[r.id] = r.status));
-        setMarks(m);
-      } else {
-        setMarks({});
+    (async () => {
+      const rec = await loadObj(attKey, null);
+      let variants = [];
+      if (className !== "Dhammaan") {
+        // Older attendance may be stored under another spelling of this class
+        // (trailing space, different capitals, "Al maahiruun" vs "Al-maahiruun"...).
+        const prefix = `attendance-${date}__`;
+        const keys = (await listKeys(prefix)).filter(
+          (k) => k.startsWith(prefix) && k !== attKey && sameClass(k.slice(prefix.length), className)
+        );
+        const loaded = await Promise.all(keys.map(async (k) => ({ key: k, rec: await loadObj(k, null) })));
+        variants = loaded.filter((v) => v.rec && Array.isArray(v.rec.records));
       }
+      if (!alive) return;
+      const m = {};
+      // Variants first, then the current key so the current key wins on conflicts.
+      [...variants.map((v) => v.rec), rec].forEach((r) => {
+        if (r && Array.isArray(r.records)) r.records.forEach((x) => { m[x.id] = x.status; });
+      });
+      setMarks(m);
+      setVariantRecs(variants);
       setSaved(false);
-    });
+    })();
     return () => {
       alive = false;
     };
@@ -1047,7 +1199,21 @@ function AttendanceScreen() {
 
   const save = async () => {
     const records = roster.map((s) => ({ id: s.id, name: s.name, status: marks[s.id] || "Maqan" }));
-    await saveObj(attKey, { date, className, records });
+    // Keep variant records for students no longer in this roster so nothing is lost
+    // when the other spellings are merged into the one clean key.
+    const have = new Set(records.map((r) => String(r.id)));
+    const extra = [];
+    variantRecs.forEach((v) => v.rec.records.forEach((r) => {
+      if (!have.has(String(r.id))) { have.add(String(r.id)); extra.push(r); }
+    }));
+    const ok = await saveObj(attKey, { date, className, records: [...records, ...extra] });
+    if (!ok) {
+      notify("Xaadirinta lama kaydin. Hubi internet-ka oo mar kale isku day.", "error");
+      return;
+    }
+    // Remove the other spellings only after the merged record was saved successfully.
+    for (const v of variantRecs) await deleteKey(v.key);
+    setVariantRecs([]);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -1187,7 +1353,10 @@ function InvoicesScreen({ config, tr }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.studentName || !form.amount) return;
+    if (!form.studentName) { notify("Dooro ardayga.", "error"); return; }
+    const amountError = validateAmount(form.amount);
+    if (amountError) { notify(amountError, "error"); return; }
+    if (form.dueDate && !isValidISODate(form.dueDate)) { notify("Taariikhda dhammaadka ma saxna.", "error"); return; }
     const item = {
       ...form,
       id: `INV-${Date.now()}`,
@@ -1322,7 +1491,10 @@ function FinanceScreen({ config }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.studentName || !form.amount || Number(form.amount) <= 0) return;
+    if (!form.studentName) { notify("Dooro ardayga.", "error"); return; }
+    const amountError = validateAmount(form.amount);
+    if (amountError) { notify(amountError, "error"); return; }
+    if (form.date && !isValidISODate(form.date)) { notify("Taariikhda ma saxna.", "error"); return; }
     if (editingId !== null) {
       await persist(txns.map(t => String(t.id) === String(editingId) ? { ...t, ...form, amount: Number(form.amount), id: t.id, updatedAt: new Date().toISOString() } : t));
     } else {
@@ -1685,7 +1857,7 @@ function ParentsScreen() {
   }
 
   if (view === "portal") {
-    const student = students.find((s) => s.name === selected?.studentName);
+    const student = students.find((s) => sameText(s.name, selected?.studentName));
     const progress = [];
     const exams = [];
     return (
@@ -1887,7 +2059,7 @@ function SmsScreen({ tr }) {
     });
   }, []);
 
-  const classes = [...new Set(students.map((s) => s.className || s.class || s.fasal).filter(Boolean))];
+  const classes = buildClassIndex(students).labels;
   const filteredParents = parents.filter((p) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -2341,34 +2513,34 @@ function ReportsScreen({ config }) {
   const selectedClass = filters.className === "Dhammaan" ? "" : filters.className;
 
   const filteredStudents = data.students.filter((s) => {
-    if (selectedStudent && s.name !== selectedStudent) return false;
-    if (selectedClass && s.className !== selectedClass) return false;
+    if (selectedStudent && !sameText(s.name, selectedStudent)) return false;
+    if (selectedClass && !sameClass(s.className, selectedClass)) return false;
     return true;
   });
 
   const filteredAttendance = data.attendance.filter((r) => {
     if (!inRange(r.date)) return false;
-    if (selectedClass && r.className !== selectedClass) return false;
-    if (selectedStudent && r.name !== selectedStudent) return false;
+    if (selectedClass && !sameClass(r.className, selectedClass)) return false;
+    if (selectedStudent && !sameText(r.name, selectedStudent)) return false;
     return true;
   });
 
   const filteredProgress = data.progress.filter((r) => {
     if (!inRange(r.date)) return false;
-    if (selectedStudent && r.studentName !== selectedStudent) return false;
+    if (selectedStudent && !sameText(r.studentName, selectedStudent)) return false;
     if (selectedClass) {
-      const student = data.students.find((s) => s.name === r.studentName);
-      if (student?.className !== selectedClass) return false;
+      const student = data.students.find((s) => sameText(s.name, r.studentName));
+      if (!sameClass(student?.className, selectedClass)) return false;
     }
     return true;
   });
 
   const filteredQuran = data.quran.filter((r) => {
     if (!inRange(r.date)) return false;
-    if (selectedStudent && r.studentName !== selectedStudent) return false;
+    if (selectedStudent && !sameText(r.studentName, selectedStudent)) return false;
     if (selectedClass) {
-      const student = data.students.find((s) => s.name === r.studentName);
-      if (student?.className !== selectedClass) return false;
+      const student = data.students.find((s) => sameText(s.name, r.studentName));
+      if (!sameClass(student?.className, selectedClass)) return false;
     }
     return true;
   });
@@ -2376,8 +2548,8 @@ function ReportsScreen({ config }) {
   const filteredExamResults = data.examResults.filter((r) => {
     const exam = data.exams.find((e) => String(e.id) === String(r.examId));
     if (!inRange(exam?.date)) return false;
-    if (selectedStudent && r.studentName !== selectedStudent) return false;
-    if (selectedClass && exam?.className !== selectedClass) return false;
+    if (selectedStudent && !sameText(r.studentName, selectedStudent)) return false;
+    if (selectedClass && !sameClass(exam?.className, selectedClass)) return false;
     return true;
   });
 
@@ -2426,7 +2598,7 @@ function ReportsScreen({ config }) {
   const upcoming = data.activities.filter((a) => a.date && a.date >= todayISO()).length;
   const activeStudents = filteredStudents.filter((s) => s.status !== "Joojiyay").length;
 
-  const classes = Array.from(new Set(data.students.map((s) => s.className).filter(Boolean))).sort();
+  const classes = buildClassIndex(data.students).labels;
   const studentsForFilter = Array.from(new Set(data.students.map((s) => s.name).filter(Boolean))).sort();
 
   const resetFilters = () => setFilters({ from: "", to: "", className: "Dhammaan", student: "Dhammaan" });
@@ -2618,7 +2790,17 @@ function PayrollScreen({ config }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.employeeName || !form.baseSalary) return;
+    if (!form.employeeName) { notify("Dooro shaqaalaha.", "error"); return; }
+    const baseError = validateAmount(form.baseSalary);
+    if (baseError) { notify(`Mushaharka aasaasiga: ${baseError}`, "error"); return; }
+    const bonusError = form.bonus === "" || form.bonus === undefined ? "" : validateAmount(form.bonus, { allowZero: true });
+    if (bonusError) { notify(`Bonus: ${bonusError}`, "error"); return; }
+    const deductionError = form.deduction === "" || form.deduction === undefined ? "" : validateAmount(form.deduction, { allowZero: true });
+    if (deductionError) { notify(`Jaris: ${deductionError}`, "error"); return; }
+    if ((Number(form.deduction) || 0) > (Number(form.baseSalary) || 0) + (Number(form.bonus) || 0)) {
+      notify("Jarisku ma ka badnaan karo mushaharka iyo bonus-ka isku-darka.", "error");
+      return;
+    }
     setSaving(true);
     const item = {
       id: Date.now(),
@@ -3713,7 +3895,7 @@ function ExamsScreen() {
     const score = Number(resultForm.score);
     if (!Number.isFinite(score) || score < 0 || score > exam.maxScore) return;
     setSaving(true);
-    const existing = results.find((r) => String(r.examId) === String(exam.id) && r.studentName === resultForm.studentName);
+    const existing = results.find((r) => String(r.examId) === String(exam.id) && sameText(r.studentName, resultForm.studentName));
     const item = { id: existing?.id || Date.now(), examId: exam.id, studentName: resultForm.studentName, score, note: resultForm.note.trim(), updatedAt: new Date().toISOString() };
     const next = existing ? results.map((r) => (r.id === existing.id ? item : r)) : [item, ...results];
     await persistResults(next);
@@ -3731,9 +3913,9 @@ function ExamsScreen() {
     return "F";
   };
 
-  const selectedReportStudent = students.find((s) => s.name === reportStudent);
+  const selectedReportStudent = students.find((s) => sameText(s.name, reportStudent));
   const reportRows = results
-    .filter((r) => r.studentName === reportStudent)
+    .filter((r) => sameText(r.studentName, reportStudent))
     .map((r) => {
       const exam = exams.find((e) => String(e.id) === String(r.examId));
       return exam ? { ...r, exam } : null;
@@ -4906,8 +5088,8 @@ function ExcelScreen() {
       importRows.forEach((incoming) => {
         const byId = incoming.id ? next.findIndex((s) => String(s.id) === String(incoming.id)) : -1;
         const byContact = incoming.parentPhone
-          ? next.findIndex((s) => s.name?.trim().toLowerCase() === incoming.name.trim().toLowerCase() && String(s.parentPhone || "").trim() === incoming.parentPhone.trim())
-          : next.findIndex((s) => s.name?.trim().toLowerCase() === incoming.name.trim().toLowerCase());
+          ? next.findIndex((s) => sameText(s.name, incoming.name) && String(s.parentPhone || "").trim() === incoming.parentPhone.trim())
+          : next.findIndex((s) => sameText(s.name, incoming.name));
         const index = byId >= 0 ? byId : byContact;
         const clean = { ...incoming };
         if (!clean.id) delete clean.id;
@@ -5051,10 +5233,10 @@ function AchievementsScreen() {
   const removeAchievement = async (id) => { await persistAchievements(achievements.filter((a) => a.id !== id)); };
 
   const leaderboard = students.map((student) => {
-    const rows = progress.filter((r) => r.studentName === student.name && typeof r.score === "number" && !Number.isNaN(r.score));
+    const rows = progress.filter((r) => sameText(r.studentName, student.name) && typeof r.score === "number" && !Number.isNaN(r.score));
     const average = rows.length ? Math.round(rows.reduce((sum, r) => sum + Number(r.score), 0) / rows.length) : 0;
-    const quranCount = quran.filter((r) => r.studentName === student.name).length;
-    const awards = achievements.filter((a) => a.studentName === student.name).length;
+    const quranCount = quran.filter((r) => sameText(r.studentName, student.name)).length;
+    const awards = achievements.filter((a) => sameText(a.studentName, student.name)).length;
     return { ...student, average, progressCount: rows.length, quranCount, awards };
   }).filter((s) => s.progressCount > 0 || s.quranCount > 0 || s.awards > 0).sort((a, b) => b.average - a.average || b.quranCount - a.quranCount || b.awards - a.awards);
 
