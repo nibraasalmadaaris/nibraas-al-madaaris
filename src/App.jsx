@@ -5,12 +5,14 @@ import {
   AlertCircle, TrendingUp, ClipboardList, Wallet, BarChart3, MessageSquare,
   Settings, Plus, Search, Trash2, Pencil, ArrowLeft, X, Check, ChevronRight,
   Grid3x3, Send, RotateCcw, Circle, LogOut, ShieldCheck, Banknote, BriefcaseBusiness, IdCard,
-  Download, Upload, FileSpreadsheet, Trophy
+  Download, Upload, FileSpreadsheet, Trophy,
+  School, CalendarDays, Clock, ListTodo, MessageSquareWarning, NotebookPen, Receipt,
+  UsersRound, MessageCircle, MessageSquareText, Lock
 } from "lucide-react";
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v41 — Nidaamka Maareynta Madrasada
+   NIBRAAS v42 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -826,28 +828,54 @@ const NAV = [
   { id: "students", label: "Ardayda", icon: Users },
   { id: "employees", label: "Shaqaalaha", icon: UserCog },
   { id: "users", label: "Users & Roles", icon: ShieldCheck },
-  { id: "classes", label: "Fasallada", icon: GraduationCap },
+  { id: "classes", label: "Fasallada", icon: School },
   { id: "attendance", label: "Xaadirinta", icon: ClipboardCheck },
-  { id: "jadwal", label: "Jadwalka Casharrada", icon: CalendarClock },
-  { id: "daily", label: "Jadwalka Maalinlaha", icon: ClipboardList },
-  { id: "activities", label: "Hawlaha", icon: CalendarClock },
-  { id: "complaints", label: "Cabashooyinka", icon: AlertCircle },
+  { id: "jadwal", label: "Jadwalka Casharrada", icon: CalendarDays },
+  { id: "daily", label: "Jadwalka Maalinlaha", icon: Clock },
+  { id: "activities", label: "Hawlaha", icon: ListTodo },
+  { id: "complaints", label: "Cabashooyinka", icon: MessageSquareWarning },
   { id: "progress", label: "Maadooyin & Horumar", icon: TrendingUp },
   { id: "quran", label: "Qur’aan & Xifdhi", icon: BookOpen },
-  { id: "exams", label: "Imtixaannada", icon: ClipboardList },
+  { id: "exams", label: "Imtixaannada", icon: NotebookPen },
   { id: "finance", label: "Maaliyadda", icon: Wallet },
-  { id: "invoices", label: "Biilasha & Khidmadaha", icon: FileSpreadsheet },
+  { id: "invoices", label: "Biilasha & Khidmadaha", icon: Receipt },
   { id: "payroll", label: "HR & Mushaharka", icon: Banknote },
   { id: "reports", label: "Warbixinno", icon: BarChart3 },
-  { id: "parents", label: "Waalidiinta", icon: Users },
-  { id: "communication", label: "Xiriirka Waalidiinta", icon: MessageSquare },
+  { id: "parents", label: "Waalidiinta", icon: UsersRound },
+  { id: "communication", label: "Xiriirka Waalidiinta", icon: MessageCircle },
   { id: "idcards", label: "ID Cards", icon: IdCard },
-  { id: "sms", label: "Fariimaha SMS", icon: MessageSquare },
-  { id: "security", label: "Production & Security", icon: ShieldCheck },
+  { id: "sms", label: "Fariimaha SMS", icon: MessageSquareText },
+  { id: "security", label: "Production & Security", icon: Lock },
   { id: "excel", label: "Excel / Import & Export", icon: FileSpreadsheet },
   { id: "achievements", label: "Guulaha & Tartanka", icon: Trophy },
   { id: "config", label: "Dejinta", icon: Settings },
 ];
+
+/* ---------- module icon tones (one colour family per group of modules) ---------- */
+const TONE_PEOPLE = { bg: "#E1EFEA", fg: "#0B3D3A" };
+const TONE_LEARN = { bg: "#F6EBC8", fg: "#8A6A0A" };
+const TONE_MONEY = { bg: "#E2F0DD", fg: "#2F6B3A" };
+const TONE_TALK = { bg: "#F7E4DF", fg: "#A2503F" };
+const TONE_SYSTEM = { bg: "#E6EAE8", fg: "#3B4F4B" };
+const MODULE_TONES = {
+  home: TONE_SYSTEM, students: TONE_PEOPLE, employees: TONE_PEOPLE, users: TONE_PEOPLE, parents: TONE_PEOPLE,
+  classes: TONE_LEARN, attendance: TONE_LEARN, jadwal: TONE_LEARN, daily: TONE_LEARN, activities: TONE_LEARN,
+  progress: TONE_LEARN, quran: TONE_LEARN, exams: TONE_LEARN, achievements: TONE_LEARN,
+  finance: TONE_MONEY, invoices: TONE_MONEY, payroll: TONE_MONEY,
+  complaints: TONE_TALK, communication: TONE_TALK, sms: TONE_TALK,
+  reports: TONE_SYSTEM, idcards: TONE_SYSTEM, security: TONE_SYSTEM, excel: TONE_SYSTEM, config: TONE_SYSTEM,
+};
+function IconTile({ id, icon: Icon, size = 44, iconSize = 20, tone, className = "" }) {
+  const t = tone || MODULE_TONES[id] || TONE_SYSTEM;
+  return (
+    <span
+      className={`inline-flex items-center justify-center shrink-0 ${className}`}
+      style={{ width: size, height: size, borderRadius: Math.round(size * 0.32), backgroundColor: t.bg, color: t.fg, boxShadow: "inset 0 0 0 1px rgba(11,61,58,0.06)" }}
+    >
+      <Icon size={iconSize} strokeWidth={2} />
+    </span>
+  );
+}
 const PRIMARY_TABS = ["home", "students", "attendance", "finance"];
 
 /* =========================================================
@@ -3616,7 +3644,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
               style={{ backgroundColor: tone.backgroundColor, border: `1px solid ${card.tone === "light" ? COLORS.line : "transparent"}`, cursor: allowed ? "pointer" : "default" }}
             >
               <div className="flex items-center justify-between gap-2">
-                <card.icon size={18} style={{ color: tone.icon }} />
+                <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl" style={{ backgroundColor: card.tone === "teal" || card.tone === "tealLight" ? "rgba(255,255,255,0.12)" : card.tone === "brick" ? "rgba(162,80,63,0.12)" : card.tone === "gold" ? "rgba(11,61,58,0.08)" : "rgba(23,92,84,0.10)" }}><card.icon size={18} style={{ color: tone.icon }} /></span>
                 {card.label === "Xaadirinta Maanta" && <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS.gold }} />}
               </div>
               <p className="text-2xl font-bold mt-3 truncate" style={{ color: tone.color, fontFamily: DISPLAY_FONT }}>{card.value}</p>
@@ -3706,7 +3734,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
         <div className="flex items-center justify-between mb-4"><div><p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Falcelin degdeg ah</p><h2 className="text-lg font-semibold mt-1" style={{ fontFamily: DISPLAY_FONT }}>Qaybaha muhiimka ah</h2></div><BarChart3 size={22} style={{ color: COLORS.gold }} /></div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {quick.slice(0, 6).map((n) => (
-            <button key={n.id} onClick={() => goTo(n.id)} className="rounded-xl p-3 text-left" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><n.icon size={17} style={{ color: COLORS.gold }} /><span className="block text-xs mt-2" style={{ color: "#fff" }}>{navLabel(n.id, n.label)}</span></button>
+            <button key={n.id} onClick={() => goTo(n.id)} className="rounded-xl p-3 text-left" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><span className="inline-flex items-center justify-center w-8 h-8 rounded-lg" style={{ backgroundColor: "rgba(201,162,39,0.18)" }}><n.icon size={17} style={{ color: COLORS.gold }} /></span><span className="block text-xs mt-2" style={{ color: "#fff" }}>{navLabel(n.id, n.label)}</span></button>
           ))}
         </div>
       </div>
@@ -3714,7 +3742,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
       <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: COLORS.inkSoft }}>Dhammaan Qaybaha</p>
       <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-7 gap-3">
         {quick.map((n) => (
-          <button key={n.id} onClick={() => goTo(n.id)} className="flex flex-col items-center gap-1.5"><div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ backgroundColor: COLORS.sandDeep, border: `1px solid ${COLORS.line}` }}><n.icon size={20} style={{ color: COLORS.teal }} /></div><span className="text-[11px] text-center leading-tight" style={{ color: COLORS.ink }}>{navLabel(n.id, n.label)}</span></button>
+          <button key={n.id} onClick={() => goTo(n.id)} className="flex flex-col items-center gap-1.5"><IconTile id={n.id} icon={n.icon} size={56} iconSize={22} /><span className="text-[11px] text-center leading-tight" style={{ color: COLORS.ink }}>{navLabel(n.id, n.label)}</span></button>
         ))}
       </div>
     </div>
@@ -6055,7 +6083,12 @@ useEffect(() => {
                   color: isActive ? COLORS.gold : "rgba(247,243,234,0.75)",
                 }}
               >
-                <n.icon size={17} />
+                <span
+                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg shrink-0"
+                  style={{ backgroundColor: isActive ? "rgba(201,162,39,0.22)" : "rgba(255,255,255,0.07)" }}
+                >
+                  <n.icon size={16} />
+                </span>
                 {navLabel(n.id, n.label)}
               </button>
             );
@@ -6212,10 +6245,12 @@ useEffect(() => {
               <button
                 key={id}
                 onClick={() => goTo(id)}
-                className="flex-1 flex flex-col items-center gap-1 py-2.5"
+                className="flex-1 flex flex-col items-center gap-0.5 py-1.5"
                 style={{ color: isActive ? COLORS.teal : COLORS.inkSoft }}
               >
-                <n.icon size={19} />
+                <span className="inline-flex items-center justify-center h-7 w-12 rounded-full transition" style={{ backgroundColor: isActive ? "rgba(11,61,58,0.10)" : "transparent" }}>
+                  <n.icon size={19} strokeWidth={isActive ? 2.4 : 2} />
+                </span>
                 <span className="text-[10px] font-medium" style={{ fontFamily: BODY_FONT }}>
                   {navLabel(n.id, n.label)}
                 </span>
@@ -6224,10 +6259,12 @@ useEffect(() => {
           })}
           <button
             onClick={() => setMoreOpen((v) => !v)}
-            className="flex-1 flex flex-col items-center gap-1 py-2.5"
+            className="flex-1 flex flex-col items-center gap-0.5 py-1.5"
             style={{ color: moreOpen ? COLORS.teal : COLORS.inkSoft }}
           >
-            <Grid3x3 size={19} />
+            <span className="inline-flex items-center justify-center h-7 w-12 rounded-full transition" style={{ backgroundColor: moreOpen ? "rgba(11,61,58,0.10)" : "transparent" }}>
+              <Grid3x3 size={19} strokeWidth={moreOpen ? 2.4 : 2} />
+            </span>
             <span className="text-[10px] font-medium" style={{ fontFamily: BODY_FONT }}>
               Kale
             </span>
@@ -6275,12 +6312,7 @@ useEffect(() => {
               <div className="grid grid-cols-4 gap-4">
                 {moreItems.map((n) => (
                   <button key={n.id} onClick={() => goTo(n.id)} className="flex flex-col items-center gap-1.5">
-                    <div
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center"
-                      style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }}
-                    >
-                      <n.icon size={20} style={{ color: COLORS.teal }} />
-                    </div>
+                    <IconTile id={n.id} icon={n.icon} size={56} iconSize={22} />
                     <span className="text-[11px] text-center leading-tight" style={{ color: COLORS.ink, fontFamily: BODY_FONT }}>
                       {navLabel(n.id, n.label)}
                     </span>
