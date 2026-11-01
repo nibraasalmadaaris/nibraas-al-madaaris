@@ -8,7 +8,7 @@
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F7F3EA",
+  "background_color": "#FFFFFF",
   "theme_color": "#082C2A",
   "categories": ["education", "productivity"],
   "icons": [

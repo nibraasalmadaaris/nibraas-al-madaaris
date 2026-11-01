@@ -8,7 +8,7 @@
    - A new worker waits until the person taps "Cusboonaysii" (see src/registerServiceWorker.js),
      so an update never reloads the page in the middle of a form.
    Change VERSION whenever you change this file; old caches are deleted on activate. */
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `nibraas-shell-${VERSION}`;
 const ASSET_CACHE = `nibraas-assets-${VERSION}`;
 const SHELL_URLS = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
