@@ -10,7 +10,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v38 — Nidaamka Maareynta Madrasada
+   NIBRAAS v41 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -550,12 +550,16 @@ function UsersScreen({ currentRole }) {
       setError("Admin cusub waxaa abuuri kara Admin-ka hadda jira oo keliya.");
       return;
     }
+    if (currentRole === "Maamule" && !["Macalin", "Xisaabiye", "Shaqaale"].includes(form.role)) {
+      setError("Maamule wuxuu abuuri karaa kaliya Macalin, Xisaabiye ama Shaqaale.");
+      return;
+    }
     if (!name || !email || !password) {
       setError("Magaca, email-ka iyo password-ka waa loo baahan yahay.");
       return;
     }
-    if (password.length < 6) {
-      setError("Password-ku waa inuu ahaadaa ugu yaraan 6 xaraf.");
+    if (password.length < 8 || password.length > 72) {
+      setError("Password-ku waa inuu ahaadaa 8 ilaa 72 xaraf.");
       return;
     }
     if (users.some((u) => u.email?.toLowerCase() === email)) {
@@ -615,7 +619,7 @@ function UsersScreen({ currentRole }) {
       setForm({ name: "", email: "", password: "", role: "Macalin" });
       setMessage(
         data.existing
-          ? "User-kii hore ayuu u jiray; hadda NIBRAAS ayaa lagu xidhay role-ka iyo tenant-ka."
+          ? "Akoonkan hore ayuu u jiray; waxaa lagu xidhay madrasaddan. Password-kiisii hore ayuu isticmaalayaa. Haddii uu illoobay, ha isticmaalo \"Furaha sirta ah waan ilaawaa\"."
           : "User-ka waa la abuuray, waa la xaqiijiyey, waxaana lagu xidhay NIBRAAS."
       );
     } catch (err) {
@@ -629,13 +633,20 @@ function UsersScreen({ currentRole }) {
     // Browser-ka lama siinayo service-role key, sidaas darteed Auth user-ka lama tirtiro halkan.
     // Waxaan kaliya ka saareynaa profile-ka maamulka.
     if (user.authUserId && CURRENT_TENANT_ID) {
-      const { error } = await supabase
+      // .select() returns the rows that were really deleted. Row-level security removes
+      // nothing without an error when the caller is not an Admin, so check the count.
+      const { data: removed, error } = await supabase
         .from("nibraas_memberships")
         .delete()
         .eq("tenant_id", CURRENT_TENANT_ID)
-        .eq("user_id", user.authUserId);
+        .eq("user_id", user.authUserId)
+        .select("user_id");
       if (error) {
         setError(error.message || "User-ka tenant-ka lagama saari karin.");
+        return;
+      }
+      if (!removed || removed.length === 0) {
+        setError("User-ka lama saarin. Admin keliya ayaa user ka saari kara madrasadda.");
         return;
       }
     }
@@ -3175,7 +3186,7 @@ const restoreBackup = async (event) => {
               <img
                 src={form.logoUrl}
                 alt="Logo-ga Madrasada"
-                className="w-14 h-14 rounded-xl object-cover border"
+                className="w-14 h-14 rounded-xl object-contain bg-white p-1 border"
                 style={{ borderColor: COLORS.line }}
                 onError={(e) => { e.currentTarget.style.display = "none"; }}
               />
@@ -3244,7 +3255,7 @@ const restoreBackup = async (event) => {
       <div className="rounded-xl border p-4 mb-5" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
         <div className="flex items-center gap-3">
           {form.logoUrl ? (
-            <img src={form.logoUrl} alt="Logo" className="w-14 h-14 rounded-xl object-cover border" style={{ borderColor: COLORS.line }} />
+            <img src={form.logoUrl} alt="Logo" className="w-14 h-14 rounded-xl object-contain bg-white p-1 border" style={{ borderColor: COLORS.line }} />
           ) : (
             <div className="w-14 h-14 rounded-xl flex items-center justify-center" style={{ backgroundColor: COLORS.gold }}>
               <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: COLORS.tealDeep }}>N</span>
@@ -6010,8 +6021,8 @@ useEffect(() => {
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:flex-col w-64 shrink-0" style={{ backgroundColor: COLORS.tealDeep }}>
         <div className="px-6 py-6 flex items-center gap-2">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: COLORS.gold }}>
-            <span style={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: COLORS.tealDeep }}>N</span>
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-white p-0.5 overflow-hidden">
+            <img src={config.logoUrl || logo} alt="NIBRAAS" className="w-full h-full object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
           </div>
           <div>
             <span className="text-lg font-semibold block" style={{ fontFamily: DISPLAY_FONT, color: "#fff" }}>
