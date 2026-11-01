@@ -5,7 +5,7 @@ import fs from "node:fs";
 
 const src = process.argv[2];
 if (!src || !fs.existsSync(src)) { console.error("Give the logo path as the first argument."); process.exit(1); }
-const BG = { r: 247, g: 243, b: 234, alpha: 1 }; // #F7F3EA, same as manifest background_color
+const BG = { r: 255, g: 255, b: 255, alpha: 1 }; // white, same as the logo background so no halo shows
 fs.mkdirSync("public/icons", { recursive: true });
 
 // Whole logo is kept (fit: contain) and never cropped; `pad` is the share of empty border.
