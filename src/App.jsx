@@ -5693,10 +5693,21 @@ useEffect(() => {
     setStudentsLoaded(true);
   });
 
-  loadArr("finance-data").then((data) => {
+  // Maaliyadda si badbaado leh u akhri: haddii akhrisku fashilmo,
+  // ha u qaadan xog madhan hana oggolaan kaydin dul-qoris ah.
+  loadArrSafe("finance-data").then((result) => {
     if (cancelled) return;
 
-    setTxns(Array.isArray(data) ? data : []);
+    if (!result.ok) {
+      console.error(
+        "Finance load failed. Saving is paused to protect existing data:",
+        result.error
+      );
+      setFinanceLoaded(false);
+      return;
+    }
+
+    setTxns(Array.isArray(result.data) ? result.data : []);
     setFinanceLoaded(true);
   });
 
