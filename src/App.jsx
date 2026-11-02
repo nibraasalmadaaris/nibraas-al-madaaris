@@ -12,7 +12,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v42 — Nidaamka Maareynta Madrasada
+   NIBRAAS v43 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -1511,21 +1511,36 @@ function FinanceScreen({ config }) {
   const [txns, setTxns] = useState([]);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [view, setView] = useState("list");
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ type: "Lacag La Bixiyay", date: todayISO() });
 
   useEffect(() => {
-    Promise.all([loadArr("finance-data"), loadArr("students-data")]).then(([arr, studentList]) => {
-      setTxns(Array.isArray(arr) ? arr : []);
+    Promise.all([loadArrSafe("finance-data"), loadArr("students-data")]).then(([fin, studentList]) => {
+      if (fin.ok) {
+        setTxns(Array.isArray(fin.data) ? fin.data : []);
+      } else {
+        // Never treat a failed read as "no records": saving would overwrite the real data.
+        setLoadFailed(true);
+        notify("Xogta maaliyadda lama soo akhrin karin. Kaydinta waa la xiray si xogta loo ilaaliyo. Dib u cusboonaysii bogga.", "error");
+      }
       setStudents(Array.isArray(studentList) ? studentList : []);
       setLoading(false);
     });
   }, []);
 
-  const persist = async (next) => {
+  // Always re-read the latest records right before writing, then apply only this one change.
+  // This keeps other devices'/users' newer records and refuses to write if the read fails.
+  const persist = async (mutate) => {
+    if (loadFailed) { notify("Kaydinta waa la xiray: xogta maaliyadda lama akhrin. Dib u cusboonaysii bogga.", "error"); return false; }
+    const fresh = await loadArrSafe("finance-data");
+    if (!fresh.ok) { notify("Xogta maaliyadda lama akhrin karin; wax lama kaydin. Isku day mar kale.", "error"); return false; }
+    const next = mutate(Array.isArray(fresh.data) ? fresh.data : []);
+    const saved = await saveArr("finance-data", next);
+    if (!saved) { notify("Kaydinta waa fashilantay. Xogtaada hore ma beddelmin.", "error"); return false; }
     setTxns(next);
-    await saveArr("finance-data", next);
+    return true;
   };
 
   const submit = async (e) => {
@@ -1535,10 +1550,12 @@ function FinanceScreen({ config }) {
     if (amountError) { notify(amountError, "error"); return; }
     if (form.date && !isValidISODate(form.date)) { notify("Taariikhda ma saxna.", "error"); return; }
     if (editingId !== null) {
-      await persist(txns.map(t => String(t.id) === String(editingId) ? { ...t, ...form, amount: Number(form.amount), id: t.id, updatedAt: new Date().toISOString() } : t));
+      const ok = await persist((cur) => cur.map(t => String(t.id) === String(editingId) ? { ...t, ...form, amount: Number(form.amount), id: t.id, updatedAt: new Date().toISOString() } : t));
+      if (!ok) return;
     } else {
       const newItem = { ...form, amount: Number(form.amount), id: Date.now(), createdAt: new Date().toISOString() };
-      await persist([newItem, ...txns]);
+      const ok = await persist((cur) => [newItem, ...cur]);
+      if (!ok) return;
     }
     setForm({ type: "Lacag La Bixiyay", date: todayISO() });
     setEditingId(null);
@@ -1553,7 +1570,7 @@ function FinanceScreen({ config }) {
 
   const deleteTxn = async (txn) => {
     if (!(await askConfirm(`Ma hubtaa inaad tirtirto diiwaanka ${txn.studentName || "lacagta"}?`, { confirmLabel: "Tirtir", danger: true }))) return;
-    await persist(txns.filter(t => String(t.id) !== String(txn.id)));
+    await persist((cur) => cur.filter(t => String(t.id) !== String(txn.id)));
   };
 
   const collected = txns.filter((t) => t.type === "Lacag La Bixiyay").reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -5682,85 +5699,10 @@ useEffect(() => {
     // Display profile metadata only; authorization comes from nibraas_memberships.
   });
 }, [session, tenantReady]);
-// 1. Kaydinta xogta Ardayda
-const [students, setStudents] = useState([]);
-const [txns, setTxns] = useState([]);
-
-const [studentsLoaded, setStudentsLoaded] = useState(false);
-const [financeLoaded, setFinanceLoaded] = useState(false);
-
-// Supabase ka soo akhri marka app-ku furmo
-useEffect(() => {
-  if (!session?.user?.id || !tenantReady) {
-    setStudentsLoaded(false);
-    setFinanceLoaded(false);
-    return;
-  }
-
-  let cancelled = false;
-
-  setStudentsLoaded(false);
-
-  loadArrSafe("students-data").then((result) => {
-    if (cancelled) return;
-
-    if (!result.ok) {
-      console.error(
-        "Students load failed. Saving is paused to protect existing data:",
-        result.error
-      );
-
-      setStudentsLoaded(false);
-      return;
-    }
-
-    setStudents(
-      Array.isArray(result.data) ? result.data : []
-    );
-
-    setStudentsLoaded(true);
-  });
-
-  // Maaliyadda si badbaado leh u akhri: haddii akhrisku fashilmo,
-  // ha u qaadan xog madhan hana oggolaan kaydin dul-qoris ah.
-  loadArrSafe("finance-data").then((result) => {
-    if (cancelled) return;
-
-    if (!result.ok) {
-      console.error(
-        "Finance load failed. Saving is paused to protect existing data:",
-        result.error
-      );
-      setFinanceLoaded(false);
-      return;
-    }
-
-    setTxns(Array.isArray(result.data) ? result.data : []);
-    setFinanceLoaded(true);
-  });
-
-  return () => {
-    cancelled = true;
-  };
-}, [session?.user?.id, tenantReady]);
-
-// Ardayda kaydi kaliya marka xogta si guul leh loo soo akhriyey
-useEffect(() => {
-  if (
-    session?.user?.id &&
-    tenantReady &&
-    studentsLoaded
-  ) {
-    saveArr("students-data", students);
-  }
-}, [students, studentsLoaded, session?.user?.id, tenantReady]);
-
-// Maaliyadda kaydi
-useEffect(() => {
-  if (session?.user?.id && tenantReady && financeLoaded) {
-    saveArr("finance-data", txns);
-  }
-}, [txns, financeLoaded, session, tenantReady]);
+// NOTE (v43): App-level students/finance state and the auto-save effects were removed.
+// Each screen (Ardayda, Maaliyadda...) loads and saves its own data. The old App-level copy was
+// never updated by those screens, but it was written back to the database whenever the auth session
+// object changed (token refresh / tab focus), overwriting newer finance records with a stale copy.
   useBrandFonts();
   useEffect(() => {
     if (document.getElementById("nibraas-pwa-meta")) return;
