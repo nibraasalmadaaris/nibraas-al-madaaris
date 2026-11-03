@@ -12,7 +12,7 @@ import {
 import logo from "./assets/Astaanta Waxbarashada Nibraas Dahab iyo Cagaar-2.png";
 
 /* ---------------------------------------------------------
-   NIBRAAS v43 — Nidaamka Maareynta Madrasada
+   NIBRAAS v44 — Nidaamka Maareynta Madrasada
    NIBRAAS is the school management application.
 --------------------------------------------------------- */
 
@@ -1207,9 +1207,19 @@ function AttendanceScreen() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const rec = await loadObj(attKey, null);
+      const isAll = className === "Dhammaan";
+      const rec = isAll ? null : await loadObj(attKey, null);
       let variants = [];
-      if (className !== "Dhammaan") {
+      if (isAll) {
+        // "Dhammaan" is only a view: show what every class already saved for this date.
+        // The old stand-alone "...__Dhammaan" record (if any) goes first so class records win.
+        const prefix = `attendance-${date}__`;
+        const keys = (await listKeys(prefix)).filter((k) => k.startsWith(prefix));
+        const loaded = await Promise.all(keys.map(async (k) => ({ key: k, rec: await loadObj(k, null) })));
+        variants = loaded
+          .filter((v) => v.rec && Array.isArray(v.rec.records))
+          .sort((a, b) => (b.key === attKey) - (a.key === attKey));
+      } else {
         // Older attendance may be stored under another spelling of this class
         // (trailing space, different capitals, "Al maahiruun" vs "Al-maahiruun"...).
         const prefix = `attendance-${date}__`;
@@ -1237,6 +1247,45 @@ function AttendanceScreen() {
   const setMark = (id, status) => setMarks((p) => ({ ...p, [id]: status }));
 
   const save = async () => {
+    if (className === "Dhammaan") {
+      // Save every student into his/her own class record. Never write a separate "Dhammaan"
+      // record: the dashboard and reports add up all records, so it would count students twice.
+      const groups = new Map();
+      students.forEach((s) => {
+        const label = classIndex.labelOf(s.className) || "Aan fasal lahayn";
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(s);
+      });
+      const targets = new Set();
+      let allOk = true;
+      for (const [label, list] of groups) {
+        const key = `attendance-${date}__${label}`;
+        targets.add(key);
+        const records = list.map((s) => ({ id: s.id, name: s.name, status: marks[s.id] || "Maqan" }));
+        const have = new Set(records.map((r) => String(r.id)));
+        const extra = [];
+        variantRecs.filter((v) => sameClass(v.key.slice(`attendance-${date}__`.length), label)).forEach((v) =>
+          v.rec.records.forEach((r) => { if (!have.has(String(r.id))) { have.add(String(r.id)); extra.push(r); } })
+        );
+        const ok = await saveObj(key, { date, className: label, records: [...records, ...extra] });
+        if (!ok) allOk = false;
+      }
+      if (!allOk) {
+        notify("Xaadirinta qayb ahaan lama kaydin. Hubi internet-ka oo mar kale isku day.", "error");
+        return;
+      }
+      // Remove old spellings / the old "Dhammaan" record, but only when every student in it is
+      // now stored in a class record (nothing is deleted if it still holds other people).
+      const known = new Set(students.map((s) => String(s.id)));
+      for (const v of variantRecs) {
+        if (targets.has(v.key)) continue;
+        if (v.rec.records.every((r) => known.has(String(r.id)))) await deleteKey(v.key);
+      }
+      setVariantRecs([]);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      return;
+    }
     const records = roster.map((s) => ({ id: s.id, name: s.name, status: marks[s.id] || "Maqan" }));
     // Keep variant records for students no longer in this roster so nothing is lost
     // when the other spellings are merged into the one clean key.
