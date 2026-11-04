@@ -398,17 +398,47 @@ async function deleteKey(key) {
 async function listKeys(prefix) {
   const physicalPrefix = physicalStorageKey(prefix);
   if (!physicalPrefix) return [];
+
+  // Do not use SQL LIKE here: attendance keys contain underscores in the date/class
+  // separator, and PostgreSQL treats each underscore as a wildcard. A literal key
+  // range plus a client-side startsWith check keeps the prefix exact.
   const { data, error } = await supabase
     .from("app_storage")
     .select("key")
     .eq("tenant_id", CURRENT_TENANT_ID)
-    .like("key", `${physicalPrefix}%`);
+    .gte("key", physicalPrefix)
+    .lt("key", `${physicalPrefix}\uffff`)
+    .order("key", { ascending: true });
+
   if (error) {
     console.error("List error:", error);
-    return [];
+    throw error;
   }
-  return (data || []).map((r) => logicalStorageKey(r.key));
+
+  return (data || [])
+    .filter((row) => typeof row?.key === "string" && row.key.startsWith(physicalPrefix))
+    .map((row) => logicalStorageKey(row.key));
 }
+async function listStorageEntries(prefix) {
+  const physicalPrefix = physicalStorageKey(prefix);
+  if (!physicalPrefix) return [];
+
+  // Read key and value together. This avoids a second request per attendance class
+  // and ensures a failed read cannot silently look like an empty attendance record.
+  const { data, error } = await supabase
+    .from("app_storage")
+    .select("key, value")
+    .eq("tenant_id", CURRENT_TENANT_ID)
+    .gte("key", physicalPrefix)
+    .lt("key", `${physicalPrefix}\uffff`)
+    .order("key", { ascending: true });
+
+  if (error) throw error;
+  return (data || [])
+    .filter((row) => typeof row?.key === "string" && row.key.startsWith(physicalPrefix))
+    .map((row) => ({ key: logicalStorageKey(row.key), value: row.value }));
+}
+
 async function loadArr(key) {
   return loadObj(key, []);
 }
@@ -953,6 +983,8 @@ function EntityScreen({ schema }) {
   const [search, setSearch] = useState("");
   const [confirmId, setConfirmId] = useState(null);
   const [errors, setErrors] = useState({});
+  const [classStudents, setClassStudents] = useState([]);
+  const [scheduleFilter, setScheduleFilter] = useState("Dhammaan");
 
   const storeKey = `${schema.key}-data`;
 
@@ -969,6 +1001,15 @@ function EntityScreen({ schema }) {
       alive = false;
     };
   }, [storeKey]);
+
+  useEffect(() => {
+    if (schema.key !== "classes") return;
+    let alive = true;
+    loadArr("students-data").then((arr) => {
+      if (alive) setClassStudents(Array.isArray(arr) ? arr : []);
+    }).catch((err) => console.error("Class student counts could not load:", err));
+    return () => { alive = false; };
+  }, [schema.key]);
 
 const persist = async (next) => {
   setItems(next);
@@ -1035,16 +1076,19 @@ const persist = async (next) => {
   };
 
   const filtered = items.filter((it) => {
-    if (!search.trim()) return true;
     const d = schema.display(it);
-    return `${d.title} ${d.sub}`.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = !search.trim() || `${d.title} ${d.sub} ${it.capacity ?? ""}`.toLowerCase().includes(search.toLowerCase());
+    const schedule = String(it.schedule || "").toLowerCase();
+    const matchesSchedule = schema.key !== "classes" || scheduleFilter === "Dhammaan" || schedule.includes(scheduleFilter.toLowerCase());
+    return matchesSearch && matchesSchedule;
   });
+  const classStudentCount = (className) => classStudents.filter((student) => sameClass(student.className || student.class || student.fasal, className)).length;
 
   const Icon = schema.icon;
 
   if (view === "form") {
     return (
-      <div className="max-w-xl mx-auto">
+      <div className={`${schema.key === "classes" ? "max-w-3xl" : "max-w-xl"} mx-auto rounded-2xl p-4 sm:p-6`} style={schema.key === "classes" ? { backgroundColor: "#FFFFFF", border: `1px solid ${COLORS.line}`, boxShadow: "0 12px 35px rgba(8,44,42,.06)" } : undefined}>
         <button
           onClick={() => setView("list")}
           className="flex items-center gap-1.5 text-sm mb-4 font-semibold"
@@ -1056,9 +1100,9 @@ const persist = async (next) => {
           {editingId ? `Wax ka beddel ${schema.singular}` : `Ku dar ${schema.singular} Cusub`}
         </h2>
         <SignatureChain className="mb-5" />
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className={schema.key === "classes" ? "grid grid-cols-1 sm:grid-cols-2 gap-4" : "space-y-4"}>
           {schema.fields.map((f) => (
-            <div key={f.key}>
+            <div key={f.key} className={schema.key === "classes" && f.key === "schedule" ? "sm:col-span-2" : ""}>
               <label
                 className="block text-xs font-semibold mb-1.5 uppercase tracking-wide"
                 style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}
@@ -1078,7 +1122,7 @@ const persist = async (next) => {
           ))}
           <button
             type="submit"
-            className="w-full rounded-lg py-3 font-semibold text-sm mt-2"
+            className={`w-full rounded-xl py-3 font-semibold text-sm mt-2 ${schema.key === "classes" ? "sm:col-span-2" : ""}`}
             style={{ backgroundColor: COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}
           >
             {editingId ? "Kaydi Beddelka" : "Kaydi"}
@@ -1089,10 +1133,21 @@ const persist = async (next) => {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className={`${schema.key === "classes" ? "max-w-5xl" : "max-w-2xl"} mx-auto`}>
+      {schema.key === "classes" && (
+        <div className="rounded-2xl p-5 sm:p-6 mb-5" style={{ background: `linear-gradient(120deg, ${COLORS.tealDeep}, ${COLORS.tealLight})`, color: "#fff" }}>
+          <div className="flex items-center gap-3 mb-4"><div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,.13)" }}><GraduationCap size={25} /></div><div><p className="text-xs opacity-75">MAAMULKA DUGSIGA</p><h2 className="text-2xl font-bold" style={{ fontFamily: DISPLAY_FONT }}>Maareynta Fasallada</h2></div></div>
+          <p className="text-sm opacity-85">Hal meel ka maamul fasallada, macallimiinta, jadwalka iyo tirada ardayda.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5">
+            <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,.12)" }}><p className="text-xs opacity-75">Wadarta fasallada</p><p className="text-2xl font-bold">{items.length}</p></div>
+            <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,.12)" }}><p className="text-xs opacity-75">Ardayda fasallada ku jira</p><p className="text-2xl font-bold">{classStudents.filter((st) => st.className || st.class || st.fasal).length}</p></div>
+            <div className="rounded-xl p-3 col-span-2 sm:col-span-1" style={{ backgroundColor: "rgba(255,255,255,.12)" }}><p className="text-xs opacity-75">Fasallada la shaandheeyey</p><p className="text-2xl font-bold">{filtered.length}</p></div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-xl font-semibold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>
-          {schema.title}
+          {schema.key === "classes" ? "Liiska Fasallada" : schema.title}
         </h2>
         <button
           onClick={openNew}
@@ -1114,6 +1169,14 @@ const persist = async (next) => {
           style={{ borderColor: COLORS.line, fontFamily: BODY_FONT }}
         />
       </div>
+      {schema.key === "classes" && (
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Dooro fasal si aad wax uga beddesho ama u aragto xogtiisa.</p>
+          <select value={scheduleFilter} onChange={(e) => setScheduleFilter(e.target.value)} className="rounded-xl border px-3 py-2 text-sm" style={{ borderColor: COLORS.line, color: COLORS.ink, backgroundColor: "#fff" }}>
+            <option value="Dhammaan">Dhammaan jadwallada</option><option value="Aroornimo">Aroornimo</option><option value="Galabnimo">Galabnimo</option><option value="Habeenimo">Habeenimo</option>
+          </select>
+        </div>
+      )}
 
       {loading ? (
         <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
@@ -1128,17 +1191,29 @@ const persist = async (next) => {
             return (
               <div
                 key={it.id}
-                className="flex items-center justify-between rounded-xl border px-4 py-3"
-                style={{ borderColor: COLORS.line, backgroundColor: "#FFFFFF" }}
+                className={`flex items-center justify-between rounded-2xl border px-4 py-4 ${schema.key === "classes" ? "sm:px-5 sm:py-5" : "py-3"}`}
+                style={{ borderColor: COLORS.line, backgroundColor: "#FFFFFF", boxShadow: schema.key === "classes" ? "0 5px 18px rgba(8,44,42,.045)" : undefined }}
               >
-                <button onClick={() => openEdit(it)} className="flex-1 text-left">
-                  <p className="text-sm font-semibold" style={{ color: COLORS.ink, fontFamily: BODY_FONT }}>
-                    {d.title}
-                  </p>
-                  {d.sub && (
-                    <p className="text-xs mt-0.5" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
-                      {d.sub}
-                    </p>
+                <button onClick={() => openEdit(it)} className="flex-1 text-left min-w-0">
+                  <div className="flex items-center gap-3">
+                    {schema.key === "classes" && <div className="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center" style={{ backgroundColor: COLORS.goldSoft, color: COLORS.teal }}><GraduationCap size={21} /></div>}
+                    <div className="min-w-0">
+                      <p className="text-sm sm:text-base font-bold truncate" style={{ color: COLORS.ink, fontFamily: BODY_FONT }}>
+                        {d.title}
+                      </p>
+                      {d.sub && (
+                        <p className="text-xs mt-1 truncate" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
+                          {d.sub}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {schema.key === "classes" && (
+                    <div className="flex flex-wrap gap-2 mt-3 ml-0 sm:ml-[52px]">
+                      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: "#EAF3EF", color: COLORS.teal }}><Users size={13} /> {classStudentCount(it.name)} arday</span>
+                      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: COLORS.goldSoft, color: COLORS.ink }}><Clock size={13} /> {it.schedule || "Jadwal lama gelin"}</span>
+                      {it.capacity && <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: COLORS.sand, color: COLORS.inkSoft }}>Xad: {it.capacity}</span>}
+                    </div>
                   )}
                 </button>
                 <div className="flex items-center gap-1">
@@ -1207,42 +1282,48 @@ function AttendanceScreen() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const isAll = className === "Dhammaan";
-      const rec = isAll ? null : await loadObj(attKey, null);
-      let variants = [];
-      if (isAll) {
-        // "Dhammaan" is only a view: show what every class already saved for this date.
-        // The old stand-alone "...__Dhammaan" record (if any) goes first so class records win.
+      try {
+        const isAll = className === "Dhammaan";
+        const rec = isAll ? null : await loadObj(attKey, null);
+        let variants = [];
         const prefix = `attendance-${date}__`;
-        const keys = (await listKeys(prefix)).filter((k) => k.startsWith(prefix));
-        const loaded = await Promise.all(keys.map(async (k) => ({ key: k, rec: await loadObj(k, null) })));
-        variants = loaded
-          .filter((v) => v.rec && Array.isArray(v.rec.records))
-          .sort((a, b) => (b.key === attKey) - (a.key === attKey));
-      } else {
-        // Older attendance may be stored under another spelling of this class
-        // (trailing space, different capitals, "Al maahiruun" vs "Al-maahiruun"...).
-        const prefix = `attendance-${date}__`;
-        const keys = (await listKeys(prefix)).filter(
-          (k) => k.startsWith(prefix) && k !== attKey && sameClass(k.slice(prefix.length), className)
-        );
-        const loaded = await Promise.all(keys.map(async (k) => ({ key: k, rec: await loadObj(k, null) })));
-        variants = loaded.filter((v) => v.rec && Array.isArray(v.rec.records));
+
+        if (isAll) {
+          // "Dhammaan" is a read-only combined view of the saved class records.
+          // Never create or depend on a separate Dhammaan record.
+          const entries = await listStorageEntries(prefix);
+          variants = entries
+            .filter((entry) => entry.key.startsWith(prefix) && Array.isArray(entry.value?.records))
+            .map((entry) => ({ key: entry.key, rec: entry.value }))
+            .sort((a, b) => Number(a.key === attKey) - Number(b.key === attKey));
+        } else {
+          // Merge legacy spellings of the selected class without losing their records.
+          const entries = await listStorageEntries(prefix);
+          variants = entries
+            .filter((entry) => entry.key.startsWith(prefix) && entry.key !== attKey &&
+              sameClass(entry.key.slice(prefix.length), className) && Array.isArray(entry.value?.records))
+            .map((entry) => ({ key: entry.key, rec: entry.value }));
+        }
+
+        if (!alive) return;
+        const nextMarks = {};
+        // Older/variant records first; the canonical selected-class record wins conflicts.
+        [...variants.map((item) => item.rec), rec].forEach((record) => {
+          if (!record || !Array.isArray(record.records)) return;
+          record.records.forEach((item) => {
+            if (item?.id != null && item.status) nextMarks[String(item.id)] = item.status;
+          });
+        });
+        setMarks(nextMarks);
+        setVariantRecs(variants);
+        setSaved(false);
+      } catch (error) {
+        console.error("Attendance load error:", error);
+        if (alive) notify("Xaadirinta lama soo akhrin karin. Xogta lama beddelin; hubi internet-ka oo mar kale fur.", "error");
       }
-      if (!alive) return;
-      const m = {};
-      // Variants first, then the current key so the current key wins on conflicts.
-      [...variants.map((v) => v.rec), rec].forEach((r) => {
-        if (r && Array.isArray(r.records)) r.records.forEach((x) => { m[x.id] = x.status; });
-      });
-      setMarks(m);
-      setVariantRecs(variants);
-      setSaved(false);
     })();
-    return () => {
-      alive = false;
-    };
-  }, [attKey]);
+    return () => { alive = false; };
+  }, [attKey, className, date]);
 
   const setMark = (id, status) => setMarks((p) => ({ ...p, [id]: status }));
 
@@ -2848,51 +2929,54 @@ function PayrollScreen({ config }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState("list");
+  const [editingId, setEditingId] = useState(null);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
-    employeeId: "",
-    employeeName: "",
-    month: new Date().toISOString().slice(0, 7),
-    baseSalary: "",
-    bonus: "0",
-    deduction: "0",
-    status: "La sugayo",
-    note: "",
+    employeeId: "", employeeName: "", month: new Date().toISOString().slice(0, 7),
+    baseSalary: "", bonus: "0", deduction: "0", status: "La sugayo", note: "",
   });
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    Promise.all([loadArr("employees-data"), loadArr("payroll-data")]).then(([emps, pays]) => {
-      setEmployees(Array.isArray(emps) ? emps : []);
-      setRecords(Array.isArray(pays) ? pays : []);
-      setLoading(false);
-    });
+    let active = true;
+    Promise.all([loadArr("employees-data"), loadArr("payroll-data")])
+      .then(([emps, pays]) => {
+        if (!active) return;
+        setEmployees(Array.isArray(emps) ? emps : []);
+        setRecords(Array.isArray(pays) ? pays : []);
+      })
+      .catch((error) => {
+        console.error("Payroll load error:", error);
+        if (active) notify("Xogta mushaharka lama soo akhrin karin.", "error");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   const persist = async (next) => {
-    setRecords(next);
     await saveArr("payroll-data", next);
+    setRecords(next);
   };
 
-  const openNew = () => {
+  const emptyForm = (selectedMonth = month) => ({
+    employeeId: "", employeeName: "", month: selectedMonth,
+    baseSalary: "", bonus: "0", deduction: "0", status: "La sugayo", note: "",
+  });
+  const openNew = () => { setEditingId(null); setForm(emptyForm()); setView("form"); };
+  const openEdit = (record) => {
+    setEditingId(record.id);
     setForm({
-      employeeId: "",
-      employeeName: "",
-      month,
-      baseSalary: "",
-      bonus: "0",
-      deduction: "0",
-      status: "La sugayo",
-      note: "",
+      employeeId: record.employeeId || "", employeeName: record.employeeName || "",
+      month: record.month || month, baseSalary: String(record.baseSalary ?? record.netSalary ?? ""),
+      bonus: String(record.bonus ?? 0), deduction: String(record.deduction ?? 0),
+      status: record.status || "La sugayo", note: record.note || "",
     });
     setView("form");
   };
-
   const selectEmployee = (id) => {
     const emp = employees.find((e) => String(e.id) === String(id));
     setForm((p) => ({ ...p, employeeId: id, employeeName: emp?.name || "" }));
   };
-
   const submit = async (e) => {
     e.preventDefault();
     if (!form.employeeName) { notify("Dooro shaqaalaha.", "error"); return; }
@@ -2902,93 +2986,84 @@ function PayrollScreen({ config }) {
     if (bonusError) { notify(`Bonus: ${bonusError}`, "error"); return; }
     const deductionError = form.deduction === "" || form.deduction === undefined ? "" : validateAmount(form.deduction, { allowZero: true });
     if (deductionError) { notify(`Jaris: ${deductionError}`, "error"); return; }
-    if ((Number(form.deduction) || 0) > (Number(form.baseSalary) || 0) + (Number(form.bonus) || 0)) {
-      notify("Jarisku ma ka badnaan karo mushaharka iyo bonus-ka isku-darka.", "error");
-      return;
-    }
+    const base = Number(form.baseSalary) || 0;
+    const bonus = Number(form.bonus) || 0;
+    const deduction = Number(form.deduction) || 0;
+    if (deduction > base + bonus) { notify("Jarisku ma ka badnaan karo mushaharka iyo bonus-ka isku-darka.", "error"); return; }
     setSaving(true);
-    const item = {
-      id: Date.now(),
-      ...form,
-      baseSalary: Number(form.baseSalary) || 0,
-      bonus: Number(form.bonus) || 0,
-      deduction: Number(form.deduction) || 0,
-      netSalary: Math.max(0, (Number(form.baseSalary) || 0) + (Number(form.bonus) || 0) - (Number(form.deduction) || 0)),
-      createdAt: new Date().toISOString(),
-    };
-    const next = [item, ...records.filter((r) => !(r.employeeId === item.employeeId && r.month === item.month))];
-    await persist(next);
-    setSaving(false);
-    setMonth(item.month);
-    setView("list");
+    try {
+      const old = records.find((r) => r.id === editingId);
+      const item = {
+        ...(old || {}), id: editingId ?? Date.now(), ...form,
+        baseSalary: base, bonus, deduction, netSalary: Math.max(0, base + bonus - deduction),
+        createdAt: old?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      const next = [item, ...records.filter((r) => r.id !== item.id && !(r.employeeId === item.employeeId && r.month === item.month))];
+      await persist(next);
+      setMonth(item.month); setEditingId(null); setView("list");
+      notify(editingId ? "Mushaharka waa la cusboonaysiiyey." : "Mushaharka waa la diiwaangeliyey.", "success");
+    } catch (error) {
+      console.error("Payroll save error:", error);
+      notify("Mushaharka lama kaydin. Isku day mar kale.", "error");
+    } finally { setSaving(false); }
   };
-
   const remove = async (id) => {
-    await persist(records.filter((r) => r.id !== id));
+    const next = records.filter((r) => r.id !== id);
+    try { await persist(next); notify("Diiwaanka waa la tirtiray.", "success"); }
+    catch (error) { console.error(error); notify("Diiwaanka lama tirtiri karin.", "error"); }
   };
 
   const monthRecords = records.filter((r) => r.month === month);
-  const filtered = monthRecords.filter((r) => {
-    if (!search.trim()) return true;
-    return `${r.employeeName} ${r.status} ${r.note || ""}`.toLowerCase().includes(search.toLowerCase());
-  });
+  const filtered = monthRecords.filter((r) => !search.trim() || `${r.employeeName} ${r.status} ${r.note || ""}`.toLowerCase().includes(search.toLowerCase()));
   const total = monthRecords.reduce((sum, r) => sum + Number(r.netSalary || 0), 0);
   const paid = monthRecords.filter((r) => r.status === "La bixiyay").reduce((sum, r) => sum + Number(r.netSalary || 0), 0);
   const pending = total - paid;
   const currency = config?.currency || "$";
-
   const money = (n) => `${currency} ${Number(n || 0).toLocaleString()}`;
+  const netPreview = Math.max(0, (Number(form.baseSalary) || 0) + (Number(form.bonus) || 0) - (Number(form.deduction) || 0));
 
   if (view === "form") {
     return (
-      <div className="max-w-2xl mx-auto">
-        <button onClick={() => setView("list")} className="flex items-center gap-1.5 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight }}>
-          <ArrowLeft size={16} /> Dib u noqo
-        </button>
-        <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Ku dar Mushahar</h2>
-        <SignatureChain className="mb-5" />
-        <form onSubmit={submit} className="rounded-xl border p-5 space-y-4" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
-          <select value={form.employeeId} onChange={(e) => selectEmployee(e.target.value)} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}>
-            <option value="">Dooro shaqaale...</option>
-            {employees.map((e) => <option key={e.id} value={e.id}>{e.name}{e.role ? ` — ${e.role}` : ""}</option>)}
-          </select>
-          <input type="month" value={form.month} onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))} required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-          <div className="grid md:grid-cols-3 gap-3">
-            <input type="number" min="0" value={form.baseSalary} onChange={(e) => setForm((p) => ({ ...p, baseSalary: e.target.value }))} placeholder="Mushaharka aasaasiga" required className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-            <input type="number" min="0" value={form.bonus} onChange={(e) => setForm((p) => ({ ...p, bonus: e.target.value }))} placeholder="Gunno" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-            <input type="number" min="0" value={form.deduction} onChange={(e) => setForm((p) => ({ ...p, deduction: e.target.value }))} placeholder="Jaritaan" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
+      <div className="max-w-3xl mx-auto">
+        <button type="button" onClick={() => { setEditingId(null); setView("list"); }} className="flex items-center gap-2 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight }}><ArrowLeft size={17}/> Dib u noqo</button>
+        <div className="rounded-2xl border overflow-hidden" style={{ borderColor: COLORS.line, background: "#fff" }}>
+          <div className="p-5 md:p-6" style={{ background: `linear-gradient(115deg, ${COLORS.tealDeep}, ${COLORS.tealLight})`, color: "#fff" }}>
+            <div className="flex items-center gap-3"><div className="rounded-xl p-3" style={{ background: "#ffffff20" }}><Banknote size={25}/></div><div><h2 className="text-xl font-bold" style={{ fontFamily: DISPLAY_FONT }}>{editingId ? "Wax ka beddel Mushahar" : "Diiwaangeli Mushahar"}</h2><p className="text-xs mt-1" style={{ color: "#D7E9E4" }}>Geli xogta mushaharka shaqaalaha.</p></div></div>
           </div>
-          <select value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}>
-            <option>La sugayo</option><option>La bixiyay</option>
-          </select>
-          <textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} placeholder="Faallo" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, minHeight: 80 }} />
-          <div className="rounded-lg p-3" style={{ backgroundColor: COLORS.sand }}>
-            <p className="text-xs" style={{ color: COLORS.inkSoft }}>Mushahar saafi ah</p>
-            <p className="text-xl font-bold" style={{ color: COLORS.teal }}>{money(Math.max(0, (Number(form.baseSalary) || 0) + (Number(form.bonus) || 0) - (Number(form.deduction) || 0)))}</p>
-          </div>
-          <button disabled={saving} className="w-full rounded-lg py-3 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>{saving ? "Kaydinaya..." : "Kaydi Mushaharka"}</button>
-        </form>
+          <form onSubmit={submit} className="p-5 md:p-6 space-y-4">
+            <div className="grid md:grid-cols-2 gap-3">
+              <label className="block text-sm font-semibold" style={{ color: COLORS.ink }}>Shaqaalaha<select value={form.employeeId} onChange={(e) => selectEmployee(e.target.value)} required className="mt-2 w-full rounded-xl border px-3 py-3 font-normal" style={{ borderColor: COLORS.line }}><option value="">Dooro shaqaale...</option>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}{e.role ? ` — ${e.role}` : ""}</option>)}</select></label>
+              <label className="block text-sm font-semibold" style={{ color: COLORS.ink }}>Bisha mushaharka<input type="month" value={form.month} onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))} required className="mt-2 w-full rounded-xl border px-3 py-3 font-normal" style={{ borderColor: COLORS.line }}/></label>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3">
+              {[ ["Mushaharka aasaasiga", "baseSalary"], ["Gunno", "bonus"], ["Jaritaan", "deduction"] ].map(([label, key]) => <label key={key} className="block text-sm font-semibold" style={{ color: COLORS.ink }}>{label}<input type="number" min="0" step="0.01" value={form[key]} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))} required={key === "baseSalary"} className="mt-2 w-full rounded-xl border px-3 py-3 font-normal" style={{ borderColor: COLORS.line }}/></label>)}
+            </div>
+            <div className="grid md:grid-cols-2 gap-3">
+              <label className="block text-sm font-semibold" style={{ color: COLORS.ink }}>Xaaladda lacag-bixinta<select value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))} className="mt-2 w-full rounded-xl border px-3 py-3 font-normal" style={{ borderColor: COLORS.line }}><option>La sugayo</option><option>La bixiyay</option></select></label>
+              <div className="rounded-xl p-3" style={{ background: COLORS.sand }}><p className="text-xs" style={{ color: COLORS.inkSoft }}>Mushahar saafi ah</p><p className="text-2xl font-bold mt-1" style={{ color: COLORS.teal }}>{money(netPreview)}</p></div>
+            </div>
+            <label className="block text-sm font-semibold" style={{ color: COLORS.ink }}>Faallo (ikhtiyaari)<textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} placeholder="Faahfaahin dheeraad ah..." rows={3} className="mt-2 w-full rounded-xl border px-3 py-3 font-normal" style={{ borderColor: COLORS.line }}/></label>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-2"><button type="button" onClick={() => { setEditingId(null); setView("list"); }} className="rounded-xl border px-5 py-3 text-sm font-semibold" style={{ borderColor: COLORS.line, color: COLORS.ink }}>Ka noqo</button><button disabled={saving} className="rounded-xl px-6 py-3 text-sm font-bold" style={{ background: COLORS.teal, color: "#fff", opacity: saving ? .7 : 1 }}>{saving ? "Kaydinaya..." : editingId ? "Cusboonaysii Mushaharka" : "Kaydi Mushaharka"}</button></div>
+          </form>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-1">
-        <div><h2 className="text-xl font-semibold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>HR & Mushaharka</h2><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Maamul mushaharka shaqaalaha iyo lacag-bixinta.</p></div>
-        <button onClick={openNew} className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.gold, color: COLORS.tealDeep }}><Plus size={16}/> Ku dar</button>
+    <div className="max-w-5xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div><div className="flex items-center gap-2"><div className="rounded-xl p-2.5" style={{ background: COLORS.goldSoft, color: COLORS.teal }}><Banknote size={22}/></div><h2 className="text-2xl font-bold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>HR & Mushaharka</h2></div><p className="text-sm mt-2" style={{ color: COLORS.inkSoft }}>Maamul mushaharka shaqaalaha iyo lacag-bixinta.</p><SignatureChain className="mt-2"/></div>
+        <button onClick={openNew} className="flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold shadow-sm" style={{ background: COLORS.gold, color: COLORS.tealDeep }}><Plus size={17}/> Ku dar Mushahar</button>
       </div>
-      <SignatureChain className="mb-5" />
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        <StatCard label="Wadarta" value={money(total)} tone="teal" />
-        <StatCard label="La bixiyay" value={money(paid)} tone="gold" />
-        <StatCard label="La sugayo" value={money(pending)} tone="light" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        {[{label:"Wadarta Mushaharka",value:total,tone:COLORS.tealDeep,sub:`${monthRecords.length} diiwaan`},{label:"La Bixiyey",value:paid,tone:COLORS.tealLight,sub:"Lacag la guddoomay"},{label:"La Sugayo",value:pending,tone:"#8A6A0A",sub:"Lacag aan weli la bixin"}].map((item) => <div key={item.label} className="rounded-2xl p-4 md:p-5" style={{ background: item.tone, color: "#fff" }}><p className="text-xs font-semibold opacity-90">{item.label}</p><p className="text-2xl font-bold mt-2">{money(item.value)}</p><p className="text-xs mt-1 opacity-75">{item.sub}</p></div>)}
       </div>
-      <div className="grid md:grid-cols-2 gap-3 mb-4">
-        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-        <div className="relative"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Raadi shaqaale..." className="w-full rounded-lg border py-2.5 pl-9 pr-3 text-sm" style={{ borderColor: COLORS.line }}/></div>
+      <div className="grid md:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1.2fr)] gap-3 mb-4">
+        <label className="relative"><span className="sr-only">Dooro bisha</span><input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-full rounded-xl border px-3 py-3 text-sm" style={{ borderColor: COLORS.line, background: "#fff" }}/></label>
+        <div className="relative"><Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Raadi magaca shaqaalaha..." className="w-full rounded-xl border py-3 pl-10 pr-3 text-sm" style={{ borderColor: COLORS.line, background: "#fff" }}/></div>
       </div>
-      {loading ? <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Waa la soo dejinayaa...</p> : filtered.length === 0 ? <EmptyState icon={Banknote} text="Wali mushahar bishan lama gelin."/> : <div className="space-y-2">{filtered.map((r) => <div key={r.id} className="rounded-xl border p-4" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-sm" style={{ color: COLORS.ink }}>{r.employeeName}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{money(r.netSalary)} · {r.status}{r.note ? ` · ${r.note}` : ""}</p></div><div className="flex items-center gap-2"><span className="rounded-full px-3 py-1 text-xs font-semibold" style={{ backgroundColor: r.status === "La bixiyay" ? COLORS.goldSoft : "#EEF5F3", color: COLORS.tealDeep }}>{r.status}</span><button onClick={() => remove(r.id)} className="p-2 rounded-lg" style={{ color: COLORS.brick, backgroundColor: "#FDECEC" }}><Trash2 size={15}/></button></div></div></div>)}</div>}
+      {loading ? <div className="rounded-2xl border p-10 text-center text-sm" style={{ borderColor: COLORS.line, color: COLORS.inkSoft }}>Waa la soo dejinayaa...</div> : filtered.length === 0 ? <div className="rounded-2xl border p-8 text-center" style={{ borderColor: COLORS.line, background: "#fff" }}><div className="mx-auto mb-3 rounded-2xl p-3 w-fit" style={{ background: COLORS.sand, color: COLORS.teal }}><Banknote size={25}/></div><p className="font-semibold" style={{ color: COLORS.ink }}>{search ? "Shaqaale lama helin." : "Weli mushahar bishan lama diiwaangelin."}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Riix “Ku dar Mushahar” si aad u bilowdo.</p></div> : <div className="space-y-3">{filtered.map((r) => <div key={r.id} className="rounded-2xl border p-4 md:p-5 flex flex-wrap items-center justify-between gap-3" style={{ borderColor: COLORS.line, background: "#fff" }}><div className="flex items-center gap-3 min-w-0"><div className="rounded-xl p-3 shrink-0" style={{ background: COLORS.sand, color: COLORS.teal }}><UserCog size={21}/></div><div className="min-w-0"><p className="font-bold text-sm" style={{ color: COLORS.ink }}>{r.employeeName}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{money(r.netSalary)} <span className="mx-1">·</span> Mushahar saafi ah</p>{r.note ? <p className="text-xs mt-1 truncate max-w-md" style={{ color: COLORS.inkSoft }}>{r.note}</p> : null}</div></div><div className="flex items-center gap-2 ml-auto"><span className="rounded-full px-3 py-1.5 text-xs font-semibold" style={{ background: r.status === "La bixiyay" ? "#E4F1E8" : COLORS.goldSoft, color: r.status === "La bixiyay" ? "#28633B" : COLORS.tealDeep }}>{r.status}</span><button type="button" onClick={() => openEdit(r)} title="Wax ka beddel" className="rounded-lg p-2" style={{ color: COLORS.teal, background: "#E8F1EE" }}><Pencil size={16}/></button><button type="button" onClick={() => remove(r.id)} title="Tirtir" className="rounded-lg p-2" style={{ color: COLORS.brick, background: "#FDECEC" }}><Trash2 size={16}/></button></div></div>)}</div>}
     </div>
   );
 }
@@ -4106,125 +4181,170 @@ function QuranScreen() {
   const [records, setRecords] = useState([]);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState("list");
   const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("Dhammaan Fasallada");
+  const [typeFilter, setTypeFilter] = useState("Dhammaan Ayatada");
+  const [selectedStudent, setSelectedStudent] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
-    studentName: "",
-    type: "Xifdhi Cusub",
-    surah: "",
-    fromAyah: "",
-    toAyah: "",
-    date: todayISO(),
-    note: "",
+    studentName: "", type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "",
+    date: todayISO(), note: "", rating: "Wanaagsan",
   });
 
   useEffect(() => {
+    let active = true;
     Promise.all([loadArr("quran-progress-data"), loadArr("students-data")]).then(([quran, studentList]) => {
+      if (!active) return;
       setRecords(Array.isArray(quran) ? quran : []);
       setStudents(Array.isArray(studentList) ? studentList : []);
       setLoading(false);
+    }).catch((err) => {
+      console.error("Quran records load failed:", err);
+      if (active) setLoading(false);
     });
+    return () => { active = false; };
   }, []);
 
   const persist = async (next) => {
-    setRecords(next);
     await saveArr("quran-progress-data", next);
+    setRecords(next);
+  };
+
+  const chooseStudent = (name) => {
+    setSelectedStudent(name);
+    setForm((p) => ({ ...p, studentName: name }));
+  };
+
+  const startNew = () => {
+    setEditingId(null);
+    setForm({ studentName: selectedStudent, type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "", date: todayISO(), note: "", rating: "Wanaagsan" });
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.studentName.trim()) return;
-    if (editingId !== null) {
-      await persist(records.map((r) => r.id === editingId ? { ...r, ...form, id: r.id } : r));
-    } else {
-      const item = { ...form, id: Date.now(), createdAt: new Date().toISOString() };
-      await persist([item, ...records]);
+    const studentName = (form.studentName || selectedStudent).trim();
+    if (!studentName) return;
+    setSaving(true);
+    try {
+      const payload = { ...form, studentName, rating: form.rating || "Wanaagsan" };
+      if (editingId !== null) {
+        await persist(records.map((r) => String(r.id) === String(editingId) ? { ...r, ...payload, id: r.id } : r));
+      } else {
+        const item = { ...payload, id: Date.now(), createdAt: new Date().toISOString() };
+        await persist([item, ...records]);
+      }
+      setSelectedStudent(studentName);
+      setForm({ studentName, type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "", date: todayISO(), note: "", rating: "Wanaagsan" });
+      setEditingId(null);
+    } catch (err) {
+      console.error("Quran record save failed:", err);
+      alert("Diiwaangelinta way fashilantay. Fadlan mar kale isku day.");
+    } finally {
+      setSaving(false);
     }
-    setForm({ studentName: "", type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "", date: todayISO(), note: "" });
-    setEditingId(null);
-    setView("list");
   };
 
   const editRecord = (record) => {
-    setForm({ studentName: record.studentName || "", type: record.type || "Xifdhi Cusub", surah: record.surah || "", fromAyah: record.fromAyah || "", toAyah: record.toAyah || "", date: record.date || todayISO(), note: record.note || "" });
+    setSelectedStudent(record.studentName || "");
+    setForm({ studentName: record.studentName || "", type: record.type || "Xifdhi Cusub", surah: record.surah || "", fromAyah: record.fromAyah || "", toAyah: record.toAyah || "", date: record.date || todayISO(), note: record.note || "", rating: record.rating || "Wanaagsan" });
     setEditingId(record.id);
-    setView("form");
   };
 
   const deleteRecord = async (id) => {
-    if (confirmDeleteId !== id) {
-      setConfirmDeleteId(id);
-      return;
+    if (confirmDeleteId !== id) { setConfirmDeleteId(id); return; }
+    try {
+      await persist(records.filter((r) => String(r.id) !== String(id)));
+    } catch (err) {
+      console.error("Quran record delete failed:", err);
+      alert("Diiwaanka lama tirtiri karin. Mar kale isku day.");
     }
-    await persist(records.filter((r) => r.id !== id));
     setConfirmDeleteId(null);
   };
 
-  const filtered = records.filter((r) => {
-    const text = `${r.studentName || ""} ${r.surah || ""} ${r.type || ""}`.toLowerCase();
-    return text.includes(search.toLowerCase());
+  const classOptions = [...new Set(students.map((s) => s.className).filter(Boolean))].sort();
+  const visibleStudents = students.filter((s) => {
+    const name = (s.name || s.fullName || "").trim();
+    const matchesSearch = name.toLowerCase().includes(search.toLowerCase());
+    const matchesClass = classFilter === "Dhammaan Fasallada" || s.className === classFilter;
+    return matchesSearch && matchesClass;
   });
-
+  const selectedStudentData = students.find((s) => (s.name || s.fullName) === selectedStudent);
+  const studentRecords = records.filter((r) => r.studentName === selectedStudent).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const filteredRecords = studentRecords.filter((r) => typeFilter === "Dhammaan Ayatada" || r.type === typeFilter);
   const todayCount = records.filter((r) => r.date === todayISO()).length;
   const studentsCount = new Set(records.map((r) => r.studentName).filter(Boolean)).size;
-
-  if (view === "form") {
-    return (
-      <div className="max-w-xl mx-auto">
-        <button onClick={() => setView("list")} className="flex items-center gap-1.5 text-sm mb-4 font-semibold" style={{ color: COLORS.tealLight, fontFamily: BODY_FONT }}>
-          <ArrowLeft size={16} /> Dib u noqo
-        </button>
-        <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>{editingId !== null ? "Wax ka beddel diiwaanka" : "Qur’aan & Xifdhi"}</h2>
-        <SignatureChain className="mb-5" />
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Ardayga *</label>
-            <StudentSearchSelect students={students} value={form.studentName} onChange={(v) => setForm((p) => ({ ...p, studentName: v }))} placeholder="Raadi magaca ardayga..." style={{ borderColor: COLORS.line }} />
-            {students.length === 0 && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Marka hore Ardayda ku dar arday.</p>}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Nooca</label>
-              <select value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }}>
-                <option>Xifdhi Cusub</option><option>Dib-u-celin</option><option>Subac</option><option>Dareeris</option><option>Akhris</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Taariikhda</label>
-              <input type="date" value={form.date} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Suuradda</label>
-            <input value={form.surah} onChange={(e) => setForm((p) => ({ ...p, surah: e.target.value }))} placeholder="Tusaale: Al-Baqarah" className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Aayadda laga bilaabay</label><input type="number" min="1" value={form.fromAyah} onChange={(e) => setForm((p) => ({ ...p, fromAyah: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /></div>
-            <div><label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Aayadda lagu dhammeeyay</label><input type="number" min="1" value={form.toAyah} onChange={(e) => setForm((p) => ({ ...p, toAyah: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line }} /></div>
-          </div>
-          <div><label className="block text-xs font-semibold mb-1.5 uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>Faallo</label><textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, minHeight: 80 }} /></div>
-          <button type="submit" className="w-full rounded-lg py-3 font-semibold text-sm" style={{ backgroundColor: COLORS.teal, color: COLORS.sand }}>{editingId !== null ? "Kaydi Beddelka" : "Kaydi Horumarka"}</button>
-        </form>
-      </div>
-    );
-  }
+  const lessonTypes = [
+    { value: "Xifdhi Cusub", title: "Cashar Cusub", sub: "Aayado cusub", Icon: BookOpen },
+    { value: "Dib-u-celin", title: "Dib u Celis", sub: "Ku celis hore", Icon: RotateCcw },
+    { value: "Dareeris", title: "Dareeris", sub: "Xoojinta xifdiga", Icon: TrendingUp },
+    { value: "Subac", title: "Subac", sub: "Qaybta subaca", Icon: CalendarDays },
+    { value: "Akhris", title: "Aqris", sub: "Akhris iyo sixid", Icon: MessageCircle },
+  ];
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-1">
-        <div><h2 className="text-xl font-semibold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Qur’aan & Xifdhi</h2><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Diiwaanka xifdhi, subac, dareeris iyo dib-u-celin.</p></div>
-        <button onClick={() => setView("form")} className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.gold, color: COLORS.tealDeep }}><Plus size={16} /> Ku dar</button>
+    <div className="w-full max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ backgroundColor: COLORS.teal, color: "#fff" }}><BookOpen size={25}/></div>
+          <div><h2 className="text-xl md:text-2xl font-bold" style={{ fontFamily: DISPLAY_FONT, color: COLORS.ink }}>Diiwaangelinta Casharrada</h2><p className="text-xs md:text-sm" style={{ color: COLORS.inkSoft }}>Hal meel ka diiwaangeli dhammaan casharrada ardayga.</p></div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm" style={{ borderColor: COLORS.line, color: COLORS.ink }}><CalendarDays size={16}/>{fmtDate(todayISO())}</div>
+          <button type="button" onClick={startNew} className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}><Plus size={17}/> Cashar Cusub</button>
+        </div>
       </div>
-      <SignatureChain className="mb-4" />
-      <div className="grid grid-cols-2 gap-3 mb-5"><StatCard label="Diiwaannada Maanta" value={todayCount} tone="teal" /><StatCard label="Ardayda leh diiwaan" value={studentsCount} tone="light" /></div>
-      <div className="relative mb-4"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Raadi arday ama suurad..." className="w-full rounded-lg border py-2.5 pl-9 pr-3 text-sm" style={{ borderColor: COLORS.line }} /></div>
-      {loading ? <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Soo dejinaya...</p> : filtered.length === 0 ? <EmptyState icon={BookOpen} text="Wali lama gelin horumar Qur’aan." /> : <div className="space-y-2">{filtered.map((r) => <div key={r.id} className="rounded-xl border px-4 py-3" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}><div className="flex items-center justify-between gap-3"><div className="min-w-0 flex-1"><p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{r.studentName}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{[r.type, r.surah, r.fromAyah || r.toAyah ? `Aayado ${r.fromAyah || "?"}–${r.toAyah || "?"}` : "", fmtDate(r.date)].filter(Boolean).join(" · ")}</p>{r.note && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{r.note}</p>}</div><div className="flex items-center gap-1"><button type="button" title="Wax ka beddel" aria-label="Wax ka beddel" onClick={() => editRecord(r)} className="p-2 rounded-lg" style={{ color: COLORS.tealLight }}><Pencil size={16} /></button><button type="button" title={confirmDeleteId === r.id ? "Xaqiiji tirtiridda" : "Tirtir"} aria-label="Tirtir" onClick={() => deleteRecord(r.id)} className="p-2 rounded-lg text-xs font-semibold" style={{ color: COLORS.brick, backgroundColor: confirmDeleteId === r.id ? "#F8E8E4" : "transparent" }}><Trash2 size={16} />{confirmDeleteId === r.id ? " Xaqiiji" : ""}</button><BookOpen size={18} style={{ color: COLORS.gold }} /></div></div></div>)}</div>}
+      <div className="grid grid-cols-2 gap-3 mb-5"><StatCard label="Diiwaannada Maanta" value={todayCount} tone="teal"/><StatCard label="Ardayda leh diiwaan" value={studentsCount} tone="light"/></div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        <section className="lg:col-span-5 rounded-2xl border p-3 md:p-4" style={{ borderColor: COLORS.line, backgroundColor: "#FFFEFA" }}>
+          <div className="relative mb-3"><Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Raadi magaca ardayga..." className="w-full rounded-xl border py-3 pl-10 pr-3 text-sm bg-transparent" style={{ borderColor: COLORS.line }}/></div>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="min-w-0 rounded-xl border px-2 py-2.5 text-xs" style={{ borderColor: COLORS.line, color: COLORS.ink }}><option>Dhammaan Fasallada</option>{classOptions.map((c) => <option key={c}>{c}</option>)}</select>
+            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="min-w-0 rounded-xl border px-2 py-2.5 text-xs" style={{ borderColor: COLORS.line, color: COLORS.ink }}><option>Dhammaan Ayatada</option>{lessonTypes.map((t) => <option key={t.value}>{t.value}</option>)}</select>
+          </div>
+          <div className="flex items-center justify-between mb-2 px-1"><h3 className="text-sm font-bold" style={{ color: COLORS.ink }}>Liiska Ardayda</h3><span className="text-xs" style={{ color: COLORS.inkSoft }}>{visibleStudents.length} arday</span></div>
+          {loading ? <p className="text-sm text-center py-8" style={{ color: COLORS.inkSoft }}>Soo dejinaya...</p> : visibleStudents.length === 0 ? <EmptyState icon={Users} text="Arday lama helin."/> : <div className="space-y-2 max-h-[570px] overflow-y-auto pr-1">{visibleStudents.map((s) => {
+            const name = (s.name || s.fullName || "Arday aan magac lahayn").trim();
+            const count = records.filter((r) => r.studentName === name).length;
+            const isSelected = selectedStudent === name;
+            return <button type="button" key={s.id || name} onClick={() => { chooseStudent(name); setEditingId(null); }} className="w-full text-left flex items-center gap-3 rounded-xl border px-3 py-3 transition-colors" style={{ borderColor: isSelected ? COLORS.teal : "transparent", backgroundColor: isSelected ? COLORS.teal : "#fff", color: isSelected ? "#fff" : COLORS.ink }}>
+              <span className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center" style={{ backgroundColor: isSelected ? "rgba(255,255,255,.18)" : COLORS.sandDeep, color: isSelected ? "#fff" : COLORS.teal }}><Users size={16}/></span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-semibold truncate">{name}</span><span className="block text-xs mt-1 truncate" style={{ color: isSelected ? "#DDEBE6" : COLORS.inkSoft }}>{[s.className || "Fasal lama gelin", `${count} diiwaan`].join(" · ")}</span></span>
+              {isSelected ? <Check size={19} style={{ color: COLORS.gold }}/> : <BookOpen size={18} style={{ color: COLORS.gold }}/ >}
+            </button>;
+          })}</div>}
+        </section>
+
+        <section className="lg:col-span-7 rounded-2xl border overflow-hidden" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
+          {selectedStudent ? <>
+            <div className="px-4 md:px-5 py-4 flex items-center gap-3" style={{ background: `linear-gradient(110deg, ${COLORS.tealDeep}, ${COLORS.teal})`, color: "#fff" }}>
+              <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,.15)" }}><Users size={23}/></div>
+              <div className="min-w-0"><h3 className="font-bold truncate">{selectedStudent}</h3><p className="text-xs mt-1" style={{ color: "#D8E7E1" }}>{selectedStudentData?.className || "Fasalka lama gelin"} · {studentRecords.length} diiwaan</p></div>
+            </div>
+            <form onSubmit={submit} className="p-4 md:p-5 space-y-4">
+              <div><h3 className="text-sm font-bold mb-3" style={{ color: COLORS.ink }}>Nooca Casharka</h3><div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2">{lessonTypes.map(({ value, title, sub, Icon }) => {
+                const active = form.type === value;
+                return <button type="button" key={value} onClick={() => setForm((p) => ({ ...p, type: value }))} className="rounded-xl border p-3 text-center min-w-0" style={{ borderColor: active ? COLORS.teal : COLORS.line, backgroundColor: active ? COLORS.teal : "#FFFEFA", color: active ? "#fff" : COLORS.ink }}><Icon size={22} className="mx-auto mb-2"/><span className="block text-xs font-bold">{title}</span><span className="block text-[10px] mt-1" style={{ color: active ? "#D8E7E1" : COLORS.inkSoft }}>{sub}</span></button>;
+              })}</div></div>
+              <div><h3 className="text-sm font-bold mb-3" style={{ color: COLORS.ink }}>Faahfaahinta Casharka</h3><div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Suuradda<input value={form.surah} onChange={(e) => setForm((p) => ({ ...p, surah: e.target.value }))} placeholder="Tusaale: Al-Baqarah" className="mt-1.5 w-full rounded-xl border px-3 py-3 text-sm font-normal" style={{ borderColor: COLORS.line, color: COLORS.ink }}/></label>
+                <label className="text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Taariikhda<input type="date" value={form.date} onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))} className="mt-1.5 w-full rounded-xl border px-3 py-3 text-sm font-normal" style={{ borderColor: COLORS.line, color: COLORS.ink }}/></label>
+                <label className="text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Aayadda laga bilaabay<input type="number" min="1" value={form.fromAyah} onChange={(e) => setForm((p) => ({ ...p, fromAyah: e.target.value }))} placeholder="Tusaale: 150" className="mt-1.5 w-full rounded-xl border px-3 py-3 text-sm font-normal" style={{ borderColor: COLORS.line, color: COLORS.ink }}/></label>
+                <label className="text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Aayadda lagu dhammeeyay<input type="number" min="1" value={form.toAyah} onChange={(e) => setForm((p) => ({ ...p, toAyah: e.target.value }))} placeholder="Tusaale: 163" className="mt-1.5 w-full rounded-xl border px-3 py-3 text-sm font-normal" style={{ borderColor: COLORS.line, color: COLORS.ink }}/></label>
+              </div></div>
+              <div><h3 className="text-sm font-bold mb-2" style={{ color: COLORS.ink }}>Qiimeyn / Xaalad</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-2">{["Wanaagsan", "Dhexe", "Daciif", "Dhamaystiran"].map((rating) => <button type="button" key={rating} onClick={() => setForm((p) => ({ ...p, rating }))} className="rounded-xl border px-2 py-2.5 text-xs font-semibold" style={{ borderColor: form.rating === rating ? COLORS.teal : COLORS.line, backgroundColor: form.rating === rating ? COLORS.teal : "#fff", color: form.rating === rating ? "#fff" : COLORS.ink }}>{form.rating === rating ? "✓  " : "○  "}{rating}</button>)}</div></div>
+              <label className="block text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Faallo (Ikhtiyaari)<textarea value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} placeholder="Tusaale: Wuu xifdiyey si wanaagsan..." className="mt-1.5 w-full rounded-xl border px-3 py-3 text-sm font-normal" style={{ borderColor: COLORS.line, color: COLORS.ink, minHeight: 76 }}/></label>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1"><button type="button" onClick={startNew} className="flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold" style={{ borderColor: COLORS.line, color: COLORS.ink }}><RotateCcw size={16}/> Nadiifi</button><button type="submit" disabled={saving} className="flex-1 sm:flex-none sm:min-w-[230px] flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold disabled:opacity-60" style={{ backgroundColor: COLORS.teal, color: "#fff" }}><Check size={18}/>{saving ? "Kaydinaya..." : editingId !== null ? "Kaydi Beddelka" : "Diiwaangeli Casharka"}</button></div>
+            </form>
+            <div className="border-t px-4 md:px-5 py-4" style={{ borderColor: COLORS.line, backgroundColor: "#FFFEFA" }}><div className="flex items-center justify-between gap-2 mb-3"><h3 className="text-sm font-bold" style={{ color: COLORS.ink }}>Diiwaannadii Ardayga</h3><span className="text-xs" style={{ color: COLORS.inkSoft }}>{filteredRecords.length} diiwaan</span></div>{filteredRecords.length === 0 ? <p className="text-xs py-3" style={{ color: COLORS.inkSoft }}>Ardaygan wali cashar looma diiwaangelin.</p> : <div className="space-y-2 max-h-56 overflow-y-auto">{filteredRecords.map((r) => <div key={r.id} className="flex items-center justify-between gap-3 rounded-xl border bg-white p-3" style={{ borderColor: COLORS.line }}><div className="min-w-0"><p className="text-sm font-semibold truncate" style={{ color: COLORS.ink }}>{r.type} · {r.surah || "Suurad lama gelin"}</p><p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>{r.fromAyah || r.toAyah ? `Aayado ${r.fromAyah || "?"}–${r.toAyah || "?"} · ` : ""}{fmtDate(r.date)}{r.rating ? ` · ${r.rating}` : ""}</p></div><div className="flex items-center gap-1 shrink-0"><button type="button" title="Wax ka beddel" onClick={() => editRecord(r)} className="p-2 rounded-lg" style={{ color: COLORS.tealLight }}><Pencil size={15}/></button><button type="button" title={confirmDeleteId === r.id ? "Xaqiiji tirtiridda" : "Tirtir"} onClick={() => deleteRecord(r.id)} className="p-2 rounded-lg" style={{ color: COLORS.brick, backgroundColor: confirmDeleteId === r.id ? "#F8E8E4" : "transparent" }}><Trash2 size={15}/></button></div></div>)}</div>}</div>
+          </> : <div className="min-h-[420px] flex flex-col items-center justify-center text-center p-6"><div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ backgroundColor: COLORS.sand, color: COLORS.teal }}><BookOpen size={30}/></div><h3 className="font-bold" style={{ color: COLORS.ink }}>Dooro ardayga</h3><p className="text-sm mt-2 max-w-xs" style={{ color: COLORS.inkSoft }}>Liiska bidix ka dooro arday si aad ugu diiwaangeliso casharkiisa cusub ama dib-u-celiska.</p></div>}
+        </section>
+      </div>
     </div>
   );
 }
-
 /* =========================================================
    App Shell
 ========================================================= */
