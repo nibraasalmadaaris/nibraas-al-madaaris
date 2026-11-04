@@ -1,9 +1,10 @@
+// FIRST import on purpose: it wraps window.fetch (to wait for database saves before an update reload).
+// The Supabase client keeps the fetch it sees when it is created, so this must be evaluated before
+// ./App.jsx (ES modules run in import order). Do not move it below the App import.
+import { registerServiceWorker } from "./registerServiceWorker";
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-// Must stay BEFORE App: it wraps window.fetch so the update bar can wait for database saves, and the
-// Supabase client keeps the fetch function it sees when it is created.
-import { registerServiceWorker } from "./registerServiceWorker";
 import App from './App.jsx'
 
 createRoot(document.getElementById('root')).render(
