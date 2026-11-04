@@ -7,8 +7,9 @@
    - /assets/* (hashed build files): cache first, they never change under the same name.
    - A new worker waits until the person taps "Cusboonaysii" (see src/registerServiceWorker.js),
      so an update never reloads the page in the middle of a form.
-   Change VERSION whenever you change this file; old caches are deleted on activate. */
-const VERSION = "v2";
+   VERSION is replaced with the build id by vite.config.js on every build, so every deploy produces a
+   different sw.js and installed apps notice it. Old caches are deleted on activate. */
+const VERSION = "__BUILD_ID__";
 const SHELL_CACHE = `nibraas-shell-${VERSION}`;
 const ASSET_CACHE = `nibraas-assets-${VERSION}`;
 const SHELL_URLS = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
@@ -16,10 +17,19 @@ const MAX_ASSET_ENTRIES = 120;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) =>
+    (async () => {
+      const shell = await caches.open(SHELL_CACHE);
       // allSettled: one missing file must never make the whole worker fail to install.
-      Promise.allSettled(SHELL_URLS.map((url) => cache.add(new Request(url, { cache: "reload" }))))
-    )
+      await Promise.allSettled(SHELL_URLS.map((url) => shell.add(new Request(url, { cache: "reload" }))));
+      // Precache the exact hashed files that this version's index.html uses, so the cached page and
+      // its scripts always belong together (no old/new mix after an update, and offline works).
+      try {
+        const html = await (await shell.match("/"))?.text();
+        const urls = Array.from(new Set((html || "").match(/\/assets\/[^"'\s)]+/g) || []));
+        const assets = await caches.open(ASSET_CACHE);
+        await Promise.allSettled(urls.map((u) => assets.add(new Request(u, { cache: "reload" }))));
+      } catch { /* precache is best effort */ }
+    })()
   );
 });
 
