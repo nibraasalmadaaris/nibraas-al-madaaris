@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
+import { qrMatrix } from "./lib/qr";
 import {
   Home, Users, UserCog, GraduationCap, ClipboardCheck, CalendarClock, BookOpen,
   AlertCircle, TrendingUp, ClipboardList, Wallet, BarChart3, MessageSquare,
@@ -129,6 +130,50 @@ function validateAmount(raw, { allowZero = false, max = 1000000 } = {}) {
   if (n < 0 || (!allowZero && n === 0)) return allowZero ? "Qadarku ma noqon karo mid taban." : "Qadarku waa inuu ka weyn yahay 0.";
   if (n > max) return `Qadarku waa inuusan ka badnaan ${max.toLocaleString()}.`;
   return "";
+}
+
+function LoadErrorBanner({ onRetry, text = "Xogta lama soo akhrin karin. Tani ma aha liis madhan; wax lama kaydin doono ilaa xogta la soo akhriyo." }) {
+  return (
+    <div role="alert" className="rounded-2xl border p-5 text-center" style={{ borderColor: COLORS.brick, backgroundColor: "#fff" }}>
+      <p className="text-sm font-semibold mb-1" style={{ color: COLORS.brick }}>Xogta lama helin</p>
+      <p className="text-sm mb-3" style={{ color: COLORS.inkSoft }}>{text}</p>
+      <button type="button" onClick={onRetry} className="rounded-lg px-4 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>Mar kale isku day</button>
+    </div>
+  );
+}
+
+/* Shown on every screen whose feature is only half built, so nobody believes a message was delivered. */
+function FeatureStatusBanner({ working, notConnected }) {
+  return (
+    <div className="rounded-2xl border p-4 mb-4 text-sm" role="note" style={{ borderColor: COLORS.gold, backgroundColor: COLORS.goldSoft, color: COLORS.ink }}>
+      <p className="font-semibold mb-1">Xaaladda adeeggan</p>
+      <p><span className="font-semibold" style={{ color: "#28633B" }}>Shaqeeya: </span>{working}</p>
+      <p className="mt-1"><span className="font-semibold" style={{ color: COLORS.brick }}>Weli lama isku xirin: </span>{notConnected}</p>
+    </div>
+  );
+}
+
+/* ---------- HTML escaping (anything typed by users that is written into a print window) ---------- */
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ---------- QR code drawn locally as SVG (student data never leaves the browser) ---------- */
+function QrCode({ value, size = 64 }) {
+  const matrix = React.useMemo(() => {
+    try { return qrMatrix(value); } catch (e) { console.error("QR error:", e); return null; }
+  }, [value]);
+  if (!matrix) return <div role="img" aria-label="QR lama sameyn karin" style={{ width: size, height: size }} className="shrink-0 border text-[8px] flex items-center justify-center">QR ✕</div>;
+  const n = matrix.length;
+  const quiet = 2;
+  let path = "";
+  matrix.forEach((row, y) => row.forEach((dark, x) => { if (dark) path += `M${x + quiet} ${y + quiet}h1v1h-1z`; }));
+  return (
+    <svg role="img" aria-label="QR code" width={size} height={size} viewBox={`0 0 ${n + quiet * 2} ${n + quiet * 2}`} shapeRendering="crispEdges" className="shrink-0">
+      <rect width={n + quiet * 2} height={n + quiet * 2} fill="#fff" />
+      <path d={path} fill="#000" />
+    </svg>
+  );
 }
 
 /* ---------- toast notifications (replaces blocking notify()) ---------- */
@@ -309,12 +354,79 @@ function StudentSearchSelect({ students = [], value = "", onChange, placeholder 
 /* ---------- secure tenant/branch storage ---------- */
 const GLOBAL_STORAGE_KEYS = new Set(["user-profiles", "config-data", "branches-data"]);
 let CURRENT_TENANT_ID = null;
-let CURRENT_BRANCH_ID = (() => {
-  try { return localStorage.getItem("nibraas-active-branch") || "main"; } catch { return "main"; }
-})();
+// The active branch is only known after the tenant is verified and that tenant's own
+// branch list has been read, so it starts as "main" and is never taken from a global key.
+let CURRENT_BRANCH_ID = "main";
 
 function setStorageTenant(id) {
   CURRENT_TENANT_ID = id || null;
+}
+
+/* Browser-side settings that belong to a school are stored per tenant, so two schools
+   (or two accounts) used on the same phone never see each other's branch list. */
+function tenantLocalKey(name, tenantId = CURRENT_TENANT_ID) {
+  return tenantId ? `${name}:${tenantId}` : null;
+}
+function readTenantLocal(name, tenantId = CURRENT_TENANT_ID) {
+  const key = tenantLocalKey(name, tenantId);
+  if (!key) return null;
+  try { return localStorage.getItem(key); } catch (e) { console.warn("localStorage read failed:", e); return null; }
+}
+function writeTenantLocal(name, value, tenantId = CURRENT_TENANT_ID) {
+  const key = tenantLocalKey(name, tenantId);
+  if (!key) return;
+  try { localStorage.setItem(key, value); } catch (e) { console.warn("localStorage write failed:", e); }
+}
+
+/* Tenant verification outcome classes. Only "denied" and "setup" are real answers from the
+   server; everything else is treated as a temporary problem (offline, sleeping phone, expired
+   token being refreshed) that must never be shown as "this tenant is not verified". */
+function classifyTenantError(err) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "transient";
+  const msg = String(err?.message || err || "").toLowerCase();
+  const code = String(err?.code || "");
+  const status = Number(err?.status || 0);
+  if (/failed to fetch|networkerror|network request failed|load failed|timeout|timed out|aborted|offline/.test(msg)) return "transient";
+  if (status === 0 && !code) return "transient";
+  if (status === 408 || status === 429 || status >= 500) return "transient";
+  if (code === "PGRST301" || /jwt|token/.test(msg)) return "auth";
+  if (code === "PGRST202" || code === "42883" || /could not find the function|function .* does not exist/.test(msg)) return "setup";
+  return "denied";
+}
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* One tenant-verification attempt. Never throws; never changes the verification rules. */
+async function verifyTenantOnce(user) {
+  try {
+    const requestedSchoolName = String(user.user_metadata?.nibraas_school_name || "").trim();
+
+    const { data: memberships, error: membershipError } = await supabase
+      .from("nibraas_memberships")
+      .select("tenant_id")
+      .eq("user_id", user.id)
+      .limit(1);
+    if (membershipError) {
+      console.error("Membership check error:", membershipError);
+      return { ok: false, kind: classifyTenantError(membershipError), message: "Xubinimada akoonka lama akhrin karin." };
+    }
+
+    let rpcName = "nibraas_bootstrap";
+    let rpcArgs;
+    if (!(Array.isArray(memberships) && memberships.length > 0) && requestedSchoolName) {
+      rpcName = "nibraas_register_tenant";
+      rpcArgs = { p_name: requestedSchoolName.slice(0, 120) };
+    }
+    const { data, error } = rpcArgs ? await supabase.rpc(rpcName, rpcArgs) : await supabase.rpc(rpcName);
+    if (error || !data) {
+      console.error("Tenant RPC error:", rpcName, error);
+      const kind = error ? classifyTenantError(error) : "denied";
+      return { ok: false, kind, message: error?.message || "Tenant-ka NIBRAAS lama diyaarin." };
+    }
+    return { ok: true, tenant: data };
+  } catch (e) {
+    console.error("Tenant verification crashed:", e);
+    return { ok: false, kind: classifyTenantError(e), message: String(e?.message || e) };
+  }
 }
 function setStorageBranch(id) {
   CURRENT_BRANCH_ID = id || "main";
@@ -336,9 +448,120 @@ function logicalStorageKey(physicalKey) {
   return firstColon >= 0 ? rest.slice(firstColon + 1) : rest;
 }
 
-async function loadObj(key, fallback) {
-  const physicalKey = physicalStorageKey(key);
-  if (!physicalKey) return fallback;
+/* ---------- safe storage core (data-loss protection) ----------
+   Every list/record the app keeps lives in ONE app_storage row. The old code read with a
+   fail-open helper (an error looked like an empty list) and then wrote whatever the screen held,
+   so a failed read followed by a save could replace real data with an empty list, and two
+   devices could silently overwrite each other. The rules below are enforced for ALL screens:
+   1. A key can only be saved after it was read successfully in this session (STORAGE_SYNC).
+      A failed read removes that mark, so saving is refused until a later read succeeds.
+   2. Before every write the current row is read again. If it changed since this screen loaded it
+      (another device/tab), the two versions are merged by record id instead of overwritten.
+   3. The result is always returned; callers must check it. Failures show a clear message. */
+const STORAGE_SYNC = new Map(); // physical key -> { base: value the screen last saw, json: canonical string | ABSENT }
+const ABSENT = "\u0000absent";
+const UNDEF = "\u0000undefined";
+
+function canon(v) {
+  if (v === undefined) return "null";
+  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+  }
+  return JSON.stringify(v);
+}
+const cloneJson = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+function markSynced(physicalKey, value, exists = true) {
+  STORAGE_SYNC.set(physicalKey, { base: cloneJson(value), json: exists ? canon(value) : ABSENT });
+}
+function clearSynced(physicalKey) {
+  STORAGE_SYNC.delete(physicalKey);
+}
+function resetStorageSync() {
+  STORAGE_SYNC.clear();
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+function isIdList(list) {
+  if (!Array.isArray(list)) return false;
+  const seen = new Set();
+  for (const item of list) {
+    if (!isPlainObject(item) || item.id === undefined || item.id === null) return false;
+    const id = String(item.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
+}
+const mergeCanon = (v) => (v === undefined ? UNDEF : canon(v));
+
+/* Three-way merge: base = what the screen loaded, mine = what the screen wants to save,
+   theirs = what is stored now. Lists of records are merged by id; objects field by field. */
+function merge3(base, mine, theirs) {
+  const cm = mergeCanon(mine), cb = mergeCanon(base), ct = mergeCanon(theirs);
+  if (cm === ct) return { value: mine, conflict: false };
+  if (cm === cb) return { value: theirs, conflict: false };
+  if (ct === cb) return { value: mine, conflict: false };
+
+  const baseList = Array.isArray(base) ? base : [];
+  if (Array.isArray(mine) && Array.isArray(theirs) && isIdList(mine) && isIdList(theirs) && isIdList(baseList)) {
+    const byId = (list) => new Map(list.map((x) => [String(x.id), x]));
+    const bMap = byId(baseList), mMap = byId(mine), tMap = byId(theirs);
+    const out = [];
+    let conflict = false;
+    for (const t of theirs) {
+      const id = String(t.id);
+      if (mMap.has(id)) {
+        const r = merge3(bMap.get(id), mMap.get(id), t);
+        conflict = conflict || r.conflict;
+        out.push(r.value);
+      } else if (bMap.has(id)) {
+        // I deleted it; keep it only if the other device edited it meanwhile.
+        if (canon(t) !== canon(bMap.get(id))) out.push(t);
+      } else {
+        out.push(t); // added by the other device
+      }
+    }
+    for (const m of mine) {
+      const id = String(m.id);
+      if (tMap.has(id)) continue;
+      if (bMap.has(id)) {
+        // The other device deleted it; keep my version only if I edited it.
+        if (canon(m) !== canon(bMap.get(id))) out.push(m);
+      } else {
+        out.push(m); // added by me
+      }
+    }
+    return { value: out, conflict };
+  }
+
+  if (isPlainObject(mine) && isPlainObject(theirs)) {
+    const b = isPlainObject(base) ? base : {};
+    const out = {};
+    let conflict = false;
+    for (const k of new Set([...Object.keys(b), ...Object.keys(mine), ...Object.keys(theirs)])) {
+      const r = merge3(b[k], mine[k], theirs[k]);
+      conflict = conflict || r.conflict;
+      if (r.value !== undefined) out[k] = r.value;
+    }
+    return { value: out, conflict };
+  }
+
+  // Both sides changed the same list without ids (or a mixed shape): cannot merge safely.
+  if (Array.isArray(mine) || Array.isArray(theirs)) return { value: mine, conflict: true };
+  return { value: mine, conflict: false }; // same field edited on both sides: this screen's edit wins
+}
+
+let LAST_MERGED = null; // set by saveObj when it had to merge another device's changes
+const READ_WARNED = new Map();
+function warnReadFailure(key) {
+  const now = Date.now();
+  if (now - (READ_WARNED.get(key) || 0) < 6000) return;
+  READ_WARNED.set(key, now);
+  notify("Xogta lama soo akhrin karin (isku xirka). Waxa aad aragto ma aha xogta dhabta ah, wax la kaydin maayo ilaa dib loo soo shubo.", "error");
+}
+
+async function readRaw(physicalKey) {
   try {
     const { data, error } = await supabase
       .from("app_storage")
@@ -346,22 +569,51 @@ async function loadObj(key, fallback) {
       .eq("tenant_id", CURRENT_TENANT_ID)
       .eq("key", physicalKey)
       .maybeSingle();
-
-    if (error) {
-      console.error("Load error:", error);
-      return fallback;
-    }
-    return data ? data.value : fallback;
-  } catch (e) {
-    console.error("Load error:", e);
-    return fallback;
+    if (error) return { ok: false, error };
+    return { ok: true, exists: Boolean(data), value: data ? data.value : undefined };
+  } catch (error) {
+    return { ok: false, error };
   }
 }
 
-async function saveObj(key, obj) {
+async function loadObj(key, fallback) {
   const physicalKey = physicalStorageKey(key);
-  if (!physicalKey || !CURRENT_TENANT_ID) return false;
+  if (!physicalKey) return fallback;
+  const r = await readRaw(physicalKey);
+  if (!r.ok) {
+    console.error("Load error:", key, r.error);
+    clearSynced(physicalKey); // saving this key is now refused until a read succeeds
+    warnReadFailure(key);
+    return fallback;
+  }
+  markSynced(physicalKey, r.exists ? r.value : fallback, r.exists);
+  return r.exists ? r.value : fallback;
+}
+
+async function saveObj(key, obj, opts = {}) {
+  const physicalKey = physicalStorageKey(key);
+  const fail = (msg) => { if (!opts.silent) notify(msg, "error"); return false; };
+  if (!physicalKey || !CURRENT_TENANT_ID) return fail("Kaydinta weli diyaar ma aha. Mar kale isku day.");
   const branchId = isGlobalStorageKey(key) ? "__global__" : (CURRENT_BRANCH_ID || "main");
+
+  let payload = obj;
+  let merged = false;
+  if (!opts.force) {
+    // createIfAbsent: a record that may not exist yet (e.g. today's attendance for a class). The row is
+    // still re-read below, and anything already stored is merged by id, never replaced.
+    const sync = STORAGE_SYNC.get(physicalKey) || (opts.createIfAbsent ? { base: undefined, json: ABSENT } : null);
+    if (!sync) return fail("Xogtan si ammaan ah looma akhrin, sidaas darteed wax lama kaydin si xogta hore loo ilaaliyo. Dib u fur bogga.");
+    const cur = await readRaw(physicalKey);
+    if (!cur.ok) return fail("Xogta hadda jirta lama hubin karin; wax lama kaydin. Hubi internet-ka.");
+    const curJson = cur.exists ? canon(cur.value) : ABSENT;
+    if (curJson !== sync.json && cur.exists) {
+      const m = merge3(sync.base, obj, cur.value);
+      if (m.conflict) return fail("Qalab kale ayaa xogtan beddelay oo isku-darka ma suurtagalin. Dib u soo shub bogga kadibna mar kale isku day.");
+      payload = m.value;
+      merged = canon(payload) !== canon(obj);
+    }
+  }
+
   try {
     const { error } = await supabase
       .from("app_storage")
@@ -370,30 +622,55 @@ async function saveObj(key, obj) {
           key: physicalKey,
           tenant_id: CURRENT_TENANT_ID,
           branch_id: branchId,
-          value: obj,
+          value: payload,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "key" }
       );
-    if (error) { console.error("Storage error:", error); return false; }
-    return true;
+    if (error) { console.error("Storage error:", error); return fail("Kaydinta waa fashilantay. Xogtii hore waa ammaan."); }
   } catch (e) {
     console.error("Storage error:", e);
-    return false;
+    return fail("Kaydinta waa fashilantay (isku xirka). Xogtii hore waa ammaan.");
   }
+  // The screen now matches what it holds; if the stored value differs (merge), the next save merges again.
+  markSynced(physicalKey, obj, true);
+  LAST_MERGED = merged ? { physicalKey, value: payload } : null;
+  if (merged && !opts.silent) notify("Qalab kale ayaa isbeddel sameeyay; labadaba waa la isku daray. Dib u fur bogga si aad u aragto dhammaan.", "info");
+  return true;
 }
-async function saveArr(key, arr) {
-  return saveObj(key, arr);
+async function saveArr(key, arr, opts) {
+  return saveObj(key, arr, opts);
+}
+/* Save a list and only then show it on screen. On failure the screen is reset to what is really
+   stored (or left untouched when that cannot be read), so the user never sees data that was not saved. */
+async function persistList(key, next, setState) {
+  const ok = await saveArr(key, next);
+  if (ok) {
+    const physicalKey = physicalStorageKey(key);
+    if (LAST_MERGED && LAST_MERGED.physicalKey === physicalKey) {
+      // Another device changed this list too: show the merged result and treat it as loaded.
+      markSynced(physicalKey, LAST_MERGED.value, true);
+      setState(LAST_MERGED.value);
+    } else {
+      setState(next);
+    }
+    return true;
+  }
+  const fresh = await loadArrSafe(key);
+  if (fresh.ok && Array.isArray(fresh.data)) setState(fresh.data);
+  return false;
 }
 async function deleteKey(key) {
   const physicalKey = physicalStorageKey(key);
-  if (!physicalKey) return;
+  if (!physicalKey) return false;
   const { error } = await supabase
     .from("app_storage")
     .delete()
     .eq("tenant_id", CURRENT_TENANT_ID)
     .eq("key", physicalKey);
-  if (error) console.error("Delete error:", error);
+  if (error) { console.error("Delete error:", error); return false; }
+  clearSynced(physicalKey);
+  return true;
 }
 async function listKeys(prefix) {
   const physicalPrefix = physicalStorageKey(prefix);
@@ -436,7 +713,21 @@ async function listStorageEntries(prefix) {
   if (error) throw error;
   return (data || [])
     .filter((row) => typeof row?.key === "string" && row.key.startsWith(physicalPrefix))
-    .map((row) => ({ key: logicalStorageKey(row.key), value: row.value }));
+    .map((row) => { markSynced(row.key, row.value, true); return { key: logicalStorageKey(row.key), value: row.value }; });
+}
+
+/* Read-only helper for reports/dashboard/exports: every attendance row under a prefix, plus how many
+   could not be read, so a partial result is reported instead of looking like "no attendance". */
+async function loadAttendanceRows(prefix) {
+  const keys = await listKeys(prefix); // throws when the key list itself cannot be read
+  let failed = 0;
+  const rows = await Promise.all(keys.map(async (key) => {
+    const physicalKey = physicalStorageKey(key);
+    const r = physicalKey ? await readRaw(physicalKey) : { ok: false };
+    if (!r.ok) { failed += 1; return null; }
+    return r.exists ? r.value : null;
+  }));
+  return { rows: rows.filter(Boolean), failed };
 }
 
 async function loadArr(key) {
@@ -453,31 +744,13 @@ async function loadArrSafe(key) {
       error: new Error("Tenant storage is not ready"),
     };
   }
-
-  try {
-    const { data, error } = await supabase
-      .from("app_storage")
-      .select("value")
-      .eq("tenant_id", CURRENT_TENANT_ID)
-      .eq("key", physicalKey)
-      .maybeSingle();
-
-    if (error) {
-      return { ok: false, data: null, error };
-    }
-
-    return {
-      ok: true,
-      data: data ? data.value : [],
-      error: null,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      data: null,
-      error,
-    };
+  const r = await readRaw(physicalKey);
+  if (!r.ok) {
+    clearSynced(physicalKey);
+    return { ok: false, data: null, error: r.error };
   }
+  markSynced(physicalKey, r.exists ? r.value : [], r.exists);
+  return { ok: true, data: r.exists ? r.value : [], error: null };
 }
 
 function todayISO() {
@@ -559,15 +832,15 @@ function UsersScreen({ currentRole }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    loadArr("user-profiles").then((data) => {
-      setUsers(Array.isArray(data) ? data : []);
-      setLoaded(true);
+    let alive = true;
+    loadArrSafe("user-profiles").then((res) => {
+      if (!alive) return;
+      if (res.ok) setUsers(Array.isArray(res.data) ? res.data : []);
+      else setError("Liiska users-ka lama akhrin karin. Hubi internet-ka kadibna dib u fur bogga.");
+      setLoaded(res.ok);
     });
+    return () => { alive = false; };
   }, []);
-
-  useEffect(() => {
-    if (loaded) saveArr("user-profiles", users);
-  }, [users, loaded]);
 
   const addUser = async (e) => {
     e.preventDefault();
@@ -628,7 +901,9 @@ function UsersScreen({ currentRole }) {
         try {
           const body = await functionError.context?.json?.();
           if (body?.error) detail = body.error;
-        } catch {}
+        } catch (e) {
+          console.warn("Edge Function error body could not be read:", e);
+        }
         setError(detail);
         return;
       }
@@ -647,8 +922,12 @@ function UsersScreen({ currentRole }) {
         createdAt: new Date().toISOString(),
       };
 
-      setUsers((prev) => [...prev, profile]);
+      const profileSaved = await persistList("user-profiles", [...users, profile], setUsers);
       setForm({ name: "", email: "", password: "", role: "Macalin" });
+      if (!profileSaved) {
+        setError("Akoonka waa la abuuray, laakiin liiska profile-ka lama kaydin. Dib u fur bogga; haddii uusan ka muuqan, mar kale ku dar profile-ka.");
+        return;
+      }
       setMessage(
         data.existing
           ? "Akoonkan hore ayuu u jiray; waxaa lagu xidhay madrasaddan. Password-kiisii hore ayuu isticmaalayaa. Haddii uu illoobay, ha isticmaalo \"Furaha sirta ah waan ilaawaa\"."
@@ -682,7 +961,8 @@ function UsersScreen({ currentRole }) {
         return;
       }
     }
-    setUsers((prev) => prev.filter((u) => u.id !== user.id));
+    const listSaved = await persistList("user-profiles", users.filter((u) => u.id !== user.id), setUsers);
+    if (!listSaved) { setError("User-ka membership-kiisa waa laga saaray, laakiin liiska profile-ka lama cusboonaysiin. Dib u fur bogga."); return; }
     setMessage("User-ka tenant-ka waa laga saaray. Auth account-ka wali wuxuu ku jiraa Supabase Auth.");
   };
 
@@ -985,22 +1265,25 @@ function EntityScreen({ schema }) {
   const [errors, setErrors] = useState({});
   const [classStudents, setClassStudents] = useState([]);
   const [scheduleFilter, setScheduleFilter] = useState("Dhammaan");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   const storeKey = `${schema.key}-data`;
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    loadArr(storeKey).then((arr) => {
+    loadArrSafe(storeKey).then((res) => {
       if (alive) {
-        setItems(arr);
+        setItems(res.ok && Array.isArray(res.data) ? res.data : []);
+        setLoadFailed(!res.ok);
         setLoading(false);
       }
     });
     return () => {
       alive = false;
     };
-  }, [storeKey]);
+  }, [storeKey, reloadNonce]);
 
   useEffect(() => {
     if (schema.key !== "classes") return;
@@ -1011,10 +1294,7 @@ function EntityScreen({ schema }) {
     return () => { alive = false; };
   }, [schema.key]);
 
-const persist = async (next) => {
-  setItems(next);
-  await saveArr(storeKey, next);
-};
+const persist = (next) => persistList(storeKey, next, setItems);
 
   const openNew = () => {
     setFormData({});
@@ -1056,12 +1336,15 @@ const persist = async (next) => {
       const same = items.some((it) => sameText(it.name, cleaned.name) && sameClass(it.className, cleaned.className));
       if (same && !(await askConfirm(`Arday magaca "${cleaned.name}" leh ayaa horey fasalkan ugu jira. Ma sii wadaa oo ma ku darta mar kale?`, { confirmLabel: "Haa, ku dar" }))) return;
     }
+    let saved;
     if (editingId) {
-      await persist(items.map((it) => (it.id === editingId ? { ...it, ...cleaned } : it)));
+      saved = await persist(items.map((it) => (it.id === editingId ? { ...it, ...cleaned } : it)));
     } else {
       const newItem = { ...cleaned, id: Date.now(), createdAt: new Date().toISOString() };
-      await persist([newItem, ...items]);
+      saved = await persist([newItem, ...items]);
     }
+    if (!saved) return; // keep the form open so nothing typed is lost
+    notify("Waa la kaydiyay.", "success");
     setErrors({});
     setView("list");
   };
@@ -1071,8 +1354,9 @@ const persist = async (next) => {
       setTimeout(() => setConfirmId((c) => (c === id ? null : c)), 2500);
       return;
     }
-    await persist(items.filter((it) => it.id !== id));
+    const removed = await persist(items.filter((it) => it.id !== id));
     setConfirmId(null);
+    if (removed) notify("Waa la tirtiray.", "success");
   };
 
   const filtered = items.filter((it) => {
@@ -1150,7 +1434,7 @@ const persist = async (next) => {
           {schema.key === "classes" ? "Liiska Fasallada" : schema.title}
         </h2>
         <button
-          onClick={openNew}
+          onClick={loadFailed ? () => notify("Xogta lama soo akhrin; marka hore mar kale isku day.", "error") : openNew}
           className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold"
           style={{ backgroundColor: COLORS.gold, color: COLORS.tealDeep, fontFamily: BODY_FONT }}
         >
@@ -1182,6 +1466,8 @@ const persist = async (next) => {
         <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
           Soo dejinaya...
         </p>
+      ) : loadFailed ? (
+        <LoadErrorBanner onRetry={() => { setLoading(true); setReloadNonce((n) => n + 1); }} />
       ) : filtered.length === 0 ? (
         <EmptyState icon={Icon} text={`Wali lama gelin ${schema.title.toLowerCase()}`} />
       ) : (
@@ -1265,14 +1551,21 @@ function AttendanceScreen() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [variantRecs, setVariantRecs] = useState([]); // same class saved under a different spelling
+  const [rosterFailed, setRosterFailed] = useState(false);
+  const [attReady, setAttReady] = useState(false); // today's saved marks were read successfully
+  const [rosterNonce, setRosterNonce] = useState(0);
 
   useEffect(() => {
-    Promise.all([loadArr("students-data"), loadArr("classes-data")]).then(([arr, cls]) => {
-      setStudents(arr);
-      setOfficialClasses(cls);
+    let alive = true;
+    Promise.all([loadArrSafe("students-data"), loadArrSafe("classes-data")]).then(([arr, cls]) => {
+      if (!alive) return;
+      setRosterFailed(!arr.ok || !cls.ok);
+      setStudents(arr.ok && Array.isArray(arr.data) ? arr.data : []);
+      setOfficialClasses(cls.ok && Array.isArray(cls.data) ? cls.data : []);
       setLoading(false);
     });
-  }, []);
+    return () => { alive = false; };
+  }, [rosterNonce]);
 
   const classIndex = buildClassIndex(students, officialClasses);
   const classOptions = ["Dhammaan", ...classIndex.labels];
@@ -1281,10 +1574,17 @@ function AttendanceScreen() {
   const attKey = `attendance-${date}__${className}`;
   useEffect(() => {
     let alive = true;
+    setAttReady(false);
     (async () => {
       try {
         const isAll = className === "Dhammaan";
-        const rec = isAll ? null : await loadObj(attKey, null);
+        let rec = null;
+        if (!isAll) {
+          const r = await readRaw(physicalStorageKey(attKey));
+          if (!r.ok) throw r.error || new Error("attendance read failed");
+          rec = r.exists ? r.value : null;
+          markSynced(physicalStorageKey(attKey), r.exists ? r.value : null, r.exists);
+        }
         let variants = [];
         const prefix = `attendance-${date}__`;
 
@@ -1317,6 +1617,7 @@ function AttendanceScreen() {
         setMarks(nextMarks);
         setVariantRecs(variants);
         setSaved(false);
+        setAttReady(true);
       } catch (error) {
         console.error("Attendance load error:", error);
         if (alive) notify("Xaadirinta lama soo akhrin karin. Xogta lama beddelin; hubi internet-ka oo mar kale fur.", "error");
@@ -1328,6 +1629,10 @@ function AttendanceScreen() {
   const setMark = (id, status) => setMarks((p) => ({ ...p, [id]: status }));
 
   const save = async () => {
+    if (rosterFailed || !attReady) {
+      notify("Xaadirinta weli lama akhrin (ama waa guuldarraystay); wax lama kaydin si xogta hore loo ilaaliyo. Mar kale isku day.", "error");
+      return;
+    }
     if (className === "Dhammaan") {
       // Save every student into his/her own class record. Never write a separate "Dhammaan"
       // record: the dashboard and reports add up all records, so it would count students twice.
@@ -1348,7 +1653,7 @@ function AttendanceScreen() {
         variantRecs.filter((v) => sameClass(v.key.slice(`attendance-${date}__`.length), label)).forEach((v) =>
           v.rec.records.forEach((r) => { if (!have.has(String(r.id))) { have.add(String(r.id)); extra.push(r); } })
         );
-        const ok = await saveObj(key, { date, className: label, records: [...records, ...extra] });
+        const ok = await saveObj(key, { date, className: label, records: [...records, ...extra] }, { createIfAbsent: true, silent: true });
         if (!ok) allOk = false;
       }
       if (!allOk) {
@@ -1375,7 +1680,7 @@ function AttendanceScreen() {
     variantRecs.forEach((v) => v.rec.records.forEach((r) => {
       if (!have.has(String(r.id))) { have.add(String(r.id)); extra.push(r); }
     }));
-    const ok = await saveObj(attKey, { date, className, records: [...records, ...extra] });
+    const ok = await saveObj(attKey, { date, className, records: [...records, ...extra] }, { createIfAbsent: true, silent: true });
     if (!ok) {
       notify("Xaadirinta lama kaydin. Hubi internet-ka oo mar kale isku day.", "error");
       return;
@@ -1439,6 +1744,8 @@ function AttendanceScreen() {
         <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft, fontFamily: BODY_FONT }}>
           Soo dejinaya...
         </p>
+      ) : rosterFailed ? (
+        <LoadErrorBanner onRetry={() => { setLoading(true); setRosterNonce((n) => n + 1); }} />
       ) : roster.length === 0 ? (
         <EmptyState icon={ClipboardCheck} text="Ma jiraan arday la diiwaan geliyay fasalkan." />
       ) : (
@@ -1470,10 +1777,11 @@ function AttendanceScreen() {
         </div>
       )}
 
-      {roster.length > 0 && (
+      {roster.length > 0 && !rosterFailed && (
         <button
           onClick={save}
-          className="w-full rounded-lg py-3 font-semibold text-sm"
+          disabled={!attReady}
+          className="w-full rounded-lg py-3 font-semibold text-sm disabled:opacity-50"
           style={{ backgroundColor: saved ? COLORS.tealLight : COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT }}
         >
           {saved ? "✓ La Kaydiyay" : "Kaydi Xaadirinta"}
@@ -1510,10 +1818,7 @@ function InvoicesScreen({ config, tr }) {
     });
   }, []);
 
-  const persist = async (next) => {
-    setInvoices(next);
-    await saveArr("invoices-data", next);
-  };
+  const persist = (next) => persistList("invoices-data", next, setInvoices);
 
   const chooseStudent = (id) => {
     const student = students.find((s) => String(s.id) === String(id));
@@ -1532,7 +1837,8 @@ function InvoicesScreen({ config, tr }) {
       amount: Number(form.amount) || 0,
       createdAt: new Date().toISOString(),
     };
-    await persist([item, ...invoices]);
+    if (!(await persist([item, ...invoices]))) return;
+    notify("Biilka waa la kaydiyay.", "success");
     setForm({ studentId: "", studentName: "", title: "Khidmad bille", amount: "", dueDate: todayISO(), status: "Aan La Bixin", note: "" });
     setView("list");
   };
@@ -1859,6 +2165,7 @@ function ParentsScreen() {
   const [parents, setParents] = useState([]);
   const [students, setStudents] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [view, setView] = useState("parents");
   const [selectedId, setSelectedId] = useState("");
   const [search, setSearch] = useState("");
@@ -1872,9 +2179,10 @@ function ParentsScreen() {
   });
 
   useEffect(() => {
-    Promise.all([loadArr("parents-data"), loadArr("students-data")]).then(([p, s]) => {
-      const savedParents = Array.isArray(p) ? p : [];
-      const studentList = Array.isArray(s) ? s : [];
+    Promise.all([loadArrSafe("parents-data"), loadArrSafe("students-data")]).then(([p, s]) => {
+      const savedParents = p.ok && Array.isArray(p.data) ? p.data : [];
+      const studentList = s.ok && Array.isArray(s.data) ? s.data : [];
+      if (!p.ok || !s.ok) setLoadFailed(true);
       // Waalidka lagu qoray diiwaangelinta ardayga ha uga muuqdo Parent Portal,
       // si aan mar labaad xog isku mid ah loo qorin.
       const known = new Set(savedParents.map(x => `${String(x.phone || "").replace(/\D/g, "")}|${String(x.name || "").trim().toLowerCase()}`));
@@ -1890,9 +2198,8 @@ function ParentsScreen() {
     });
   }, []);
 
-  useEffect(() => {
-    if (loaded) saveArr("parents-data", parents);
-  }, [parents, loaded]);
+  // Saved explicitly after each change (no auto-save effect): a failed read can never overwrite stored parents.
+  const persistParents = (next) => persistList("parents-data", next, setParents);
 
   const resetForm = () => {
     setForm({
@@ -1914,25 +2221,22 @@ function ParentsScreen() {
       ...form,
       createdAt: new Date().toISOString(),
     };
-    setParents((prev) => [item, ...prev]);
+    if (!(await persistParents([item, ...parents]))) return;
+    notify("Waalidka waa la kaydiyay.", "success");
     resetForm();
     setView("parents");
   };
 
   const removeParent = async (id) => {
     const next = parents.filter((p) => p.id !== id);
-    setParents(next);
+    if (!(await persistParents(next))) return;
     if (selectedId === id) setSelectedId("");
   };
 
   const togglePortal = (parent) => {
     const nextStatus =
       parent.portalStatus === "Firfircoon" ? "Aan la hawlgelin" : "Firfircoon";
-    setParents((prev) =>
-      prev.map((p) =>
-        p.id === parent.id ? { ...p, portalStatus: nextStatus } : p
-      )
-    );
+    persistParents(parents.map((p) => (p.id === parent.id ? { ...p, portalStatus: nextStatus } : p)));
   };
 
   const filtered = parents.filter((p) =>
@@ -2144,6 +2448,10 @@ function ParentsScreen() {
           <Plus size={17} /> Ku dar Waalid
         </button>
       </div>
+      <FeatureStatusBanner
+        working="Diiwaangelinta waalidiinta, ku xirka ardayda iyo eegista xogta ardayga."
+        notConnected="Parent Portal-ka dhabta ah: waalid weli ma geli karo (login u gaar ah ma jiro). Xaaladda “Firfircoon” waa calaamad gudaha ah oo keliya."
+      />
 
       <div className="rounded-xl border p-4 mb-5" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
         <div className="flex items-center gap-2">
@@ -2286,8 +2594,8 @@ function SmsScreen({ tr }) {
       sentAt: new Date().toISOString(),
     };
     const next = [entry, ...log];
-    setLog(next);
-    await saveArr("sms-log", next);
+    const saved = await persistList("sms-log", next, setLog);
+    if (!saved) { setSending(false); return; }
     setMessage("");
     setTemplate("");
     setCustomTo("");
@@ -2299,8 +2607,7 @@ function SmsScreen({ tr }) {
 
   const removeLog = async (id) => {
     const next = log.filter((x) => x.id !== id);
-    setLog(next);
-    await saveArr("sms-log", next);
+    await persistList("sms-log", next, setLog);
   };
 
   return (
@@ -2313,6 +2620,10 @@ function SmsScreen({ tr }) {
           Samee fariin, dooro cidda loo dirayo, oo hayso taariikhda fariimaha. SMS dhab ah wuxuu u baahan doonaa provider/API marka dambe.
         </p>
       </div>
+      <FeatureStatusBanner
+        working="Qorista fariimaha, dooridda cidda, templates-ka iyo kaydinta taariikhda."
+        notConnected="Dirista SMS-ga dhabta ah (ma jiro SMS provider/API). Fariimaha waxay ku kaydsan yihiin taariikhda kaliya; waalidiinta looma gaarsiin."
+      />
       <SignatureChain className="mb-4" />
 
       <div className="grid md:grid-cols-3 gap-3 mb-5">
@@ -2381,7 +2692,7 @@ function SmsScreen({ tr }) {
         </div>
 
         <button type="submit" disabled={sending || !message.trim()} className="w-full rounded-lg py-3 font-semibold text-sm flex items-center justify-center gap-2" style={{ backgroundColor: sentFlash ? COLORS.tealLight : COLORS.teal, color: COLORS.sand, fontFamily: BODY_FONT, opacity: sending || !message.trim() ? 0.65 : 1 }}>
-          <Send size={15} /> {sending ? "Kaydinaya..." : sentFlash ? "La Kaydiyay!" : "Dir Fariinta"}
+          <Send size={15} /> {sending ? "Kaydinaya..." : sentFlash ? "La Kaydiyay!" : "Kaydi Fariinta (SMS lama dirayo)"}
         </button>
       </form>
 
@@ -2467,8 +2778,7 @@ function ParentCommunicationScreen() {
 
   const saveLog = async (item) => {
     const next = [item, ...logs];
-    setLogs(next);
-    await saveArr("parent-communication-log", next);
+    return persistList("parent-communication-log", next, setLogs);
   };
 
   const sendMessage = async (e) => {
@@ -2485,7 +2795,8 @@ function ParentCommunicationScreen() {
       status: "La diyaariyey",
       createdAt: new Date().toISOString(),
     };
-    await saveLog(item);
+    const saved = await saveLog(item);
+    if (!saved) return; // keep what the user typed
     setMessage("");
     setSubject("");
   };
@@ -2505,8 +2816,8 @@ function ParentCommunicationScreen() {
     }));
     if (!alerts.length) { notify("Maanta lama helin maqnaansho si alert loogu sameeyo."); return; }
     const next = [...alerts, ...logs];
-    setLogs(next);
-    await saveArr("parent-communication-log", next);
+    const saved = await persistList("parent-communication-log", next, setLogs);
+    if (!saved) return;
     notify(`${alerts.length} ogeysiis waalid ayaa la diyaariyey.`, "success");
     setMode("history");
   };
@@ -2516,21 +2827,19 @@ function ParentCommunicationScreen() {
     if (!templateName.trim() || !templateText.trim()) return;
     const item = { id: crypto.randomUUID(), name: templateName.trim(), text: templateText.trim(), createdAt: new Date().toISOString() };
     const next = [item, ...templates];
-    setTemplates(next);
-    await saveArr("parent-message-templates", next);
+    const saved = await persistList("parent-message-templates", next, setTemplates);
+    if (!saved) return;
     setTemplateName(""); setTemplateText("");
   };
 
   const deleteTemplate = async (id) => {
     const next = templates.filter((x) => x.id !== id);
-    setTemplates(next);
-    await saveArr("parent-message-templates", next);
+    await persistList("parent-message-templates", next, setTemplates);
   };
 
   const markSent = async (id) => {
     const next = logs.map((x) => x.id === id ? { ...x, status: "La diray" } : x);
-    setLogs(next);
-    await saveArr("parent-communication-log", next);
+    await persistList("parent-communication-log", next, setLogs);
   };
 
   const tabs = [
@@ -2550,6 +2859,10 @@ function ParentCommunicationScreen() {
         </div>
       </div>
 
+      <FeatureStatusBanner
+        working="Diyaarinta farriimaha, ogeysiisyada maqnaanshaha, templates-ka iyo taariikhda xiriirka."
+        notConnected="Dirista dhabta ah ee SMS iyo Parent Portal (ma jiro provider/login waalid). Xaaladda “La diyaariyey / La diray” waa calaamad gacan-ku-sameysan; waxba looma gaarsiin waalidka."
+      />
       <div className="flex flex-wrap gap-2">
         {tabs.map(([id, label]) => <button key={id} onClick={() => setMode(id)} className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: mode === id ? COLORS.teal : "white", color: mode === id ? "white" : COLORS.ink, border: `1px solid ${COLORS.line}` }}>{label}</button>)}
       </div>
@@ -2649,9 +2962,9 @@ function ReportsScreen({ config }) {
 
       let attendance = [];
       try {
-        const keys = await listKeys("attendance-");
-        const rows = await Promise.all(keys.map((key) => loadObj(key, null)));
-        attendance = rows.filter(Boolean).flatMap((row) =>
+        const { rows, failed } = await loadAttendanceRows("attendance-");
+        if (failed) notify(`Warbixinta waa dhammaystiran tahay: ${failed} diiwaan xaadirin lama akhrin karin.`, "error");
+        attendance = rows.flatMap((row) =>
           (row.records || []).map((record) => ({
             ...record,
             date: row.date,
@@ -2660,6 +2973,7 @@ function ReportsScreen({ config }) {
         );
       } catch (e) {
         console.error("Reports attendance error:", e);
+        notify("Xaadirinta lama soo akhrin karin; warbixintu xaadirin kuma jirto.", "error");
       }
 
       setData({
@@ -2826,8 +3140,8 @@ function ReportsScreen({ config }) {
   };
 
   const printReport = () => {
-    const school = config.schoolName || "NIBRAAS";
-    const currency = config.currency || "$";
+    const school = escapeHtml(config.schoolName || "NIBRAAS");
+    const currency = escapeHtml(config.currency || "$");
     const money = (v) => `${Number(v || 0).toLocaleString()} ${currency}`.trim();
     const html = `<!doctype html><html lang="so"><head><meta charset="UTF-8"/><title>Warbixin - ${school}</title><style>
       body{font-family:Arial,sans-serif;padding:30px;color:#1B2E2B}h1{color:#0B3D3A;margin:0 0 4px}.muted{color:#5B6E69;font-size:13px;margin-bottom:22px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{border:1px solid #DED4B8;border-radius:10px;padding:14px}.label{font-size:12px;color:#5B6E69}.value{font-size:22px;font-weight:bold;color:#0B3D3A;margin-top:5px}.footer{margin-top:25px;border-top:1px solid #DED4B8;padding-top:10px;font-size:11px;color:#5B6E69}@media print{body{padding:15px}}
@@ -2953,10 +3267,7 @@ function PayrollScreen({ config }) {
     return () => { active = false; };
   }, []);
 
-  const persist = async (next) => {
-    await saveArr("payroll-data", next);
-    setRecords(next);
-  };
+  const persist = (next) => persistList("payroll-data", next, setRecords);
 
   const emptyForm = (selectedMonth = month) => ({
     employeeId: "", employeeName: "", month: selectedMonth,
@@ -2999,7 +3310,7 @@ function PayrollScreen({ config }) {
         createdAt: old?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
       const next = [item, ...records.filter((r) => r.id !== item.id && !(r.employeeId === item.employeeId && r.month === item.month))];
-      await persist(next);
+      if (!(await persist(next))) return; // persistList already explained why; the form stays open
       setMonth(item.month); setEditingId(null); setView("list");
       notify(editingId ? "Mushaharka waa la cusboonaysiiyey." : "Mushaharka waa la diiwaangeliyey.", "success");
     } catch (error) {
@@ -3009,8 +3320,7 @@ function PayrollScreen({ config }) {
   };
   const remove = async (id) => {
     const next = records.filter((r) => r.id !== id);
-    try { await persist(next); notify("Diiwaanka waa la tirtiray.", "success"); }
-    catch (error) { console.error(error); notify("Diiwaanka lama tirtiri karin.", "error"); }
+    if (await persist(next)) notify("Diiwaanka waa la tirtiray.", "success");
   };
 
   const monthRecords = records.filter((r) => r.month === month);
@@ -3273,8 +3583,9 @@ const restoreBackup = async (event) => {
       .upsert(rowsToRestore, { onConflict: "key" });
     if (error) throw error;
 
-    alert(`Restore waa guuleystay: ${rowsToRestore.length} qaybood oo xog ah ayaa la diray. NIBRAAS waa dib loo furayaa.`);
-    window.location.reload();
+    resetStorageSync(); // everything is re-read from the database after the reload
+    notify(`Restore waa guuleystay: ${rowsToRestore.length} qaybood oo xog ah ayaa la diray. NIBRAAS waa dib loo furayaa.`, "success");
+    setTimeout(() => window.location.reload(), 1800);
   } catch (error) {
     console.error("Restore error:", error);
     const detail = [error?.message, error?.details, error?.hint, error?.code ? `(code: ${error.code})` : ""].filter(Boolean).join("\n") || "Hubi backup file-ka iyo xiriirka Supabase.";
@@ -3287,7 +3598,8 @@ const restoreBackup = async (event) => {
 
   const save = async (e) => {
     e.preventDefault();
-    await saveObj("config-data", form);
+    const okConfig = await saveObj("config-data", form);
+    if (!okConfig) return;
     setConfig(form);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -3310,12 +3622,15 @@ const restoreBackup = async (event) => {
       "finance-data",
       "sms-log",
     ];
+    const failed = [];
     for (const k of keys) {
-      try {
-     await deleteKey(k);
-      } catch (e) {}
+      if (!(await deleteKey(k))) failed.push(k);
     }
     setResetStep(false);
+    if (failed.length) {
+      notify(`Dib-u-dejintu way dhammaystirmin: ${failed.length} qayb lama tirtirin (${failed.join(", ")}).`, "error");
+      return;
+    }
     window.location.reload();
   };
 
@@ -3547,7 +3862,6 @@ function IdCardsScreen({ config }) {
 
   const card = (student, printMode = false) => {
     const token = `NIBRAAS-STUDENT-${student.id || student.name || "student"}`;
-    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(token)}&size=180&margin=1`;
     return (
       <div
         key={student.id || student.name}
@@ -3581,7 +3895,7 @@ function IdCardsScreen({ config }) {
             <div className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Xaalad: <b>{student.status || "Firfircoon"}</b></div>
             {student.parentPhone && <div className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Waalid: {student.parentPhone}</div>}
           </div>
-          <img src={qrUrl} alt="QR" width="64" height="64" className="shrink-0" />
+          <QrCode value={token} size={64} />
         </div>
         <div className="px-5 py-2 text-[9px]" style={{ backgroundColor: COLORS.sand, color: COLORS.inkSoft }}>
           ID: {String(student.id || student.name || "").slice(-12)} · NIBRAAS
@@ -3632,6 +3946,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
     progress: [], exams: [], examResults: [], quran: [], payroll: [],
   });
   const [attendance, setAttendance] = useState({ present: 0, total: 0 });
+  const [attendanceTrend, setAttendanceTrend] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refreshDashboard = useCallback(async () => {
@@ -3653,9 +3968,9 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
       let present = 0;
       let total = 0;
       try {
-        const keys = await listKeys(`attendance-${todayISO()}`);
-        const rows = await Promise.all(keys.map((key) => loadObj(key, null)));
-        rows.filter(Boolean).forEach((row) => {
+        const { rows, failed } = await loadAttendanceRows(`attendance-${todayISO()}`);
+        if (failed) notify(`Xaadirinta maanta: ${failed} diiwaan lama akhrin karin.`, "error");
+        rows.forEach((row) => {
           (row.records || []).forEach((record) => {
             total += 1;
             if (record.status === "Joogto") present += 1;
@@ -3663,6 +3978,7 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
         });
       } catch (e) {
         console.error("Dashboard attendance error:", e);
+        notify("Xaadirinta maanta lama soo akhrin karin.", "error");
       }
 
       setData({
@@ -3678,6 +3994,30 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
         payroll: Array.isArray(payroll) ? payroll : [],
       });
       setAttendance({ present, total });
+
+      // Attendance of the current month, per day, for the progress chart (one query).
+      try {
+        const monthPrefix = `attendance-${todayISO().slice(0, 7)}`;
+        const entries = await listStorageEntries(monthPrefix);
+        const byDay = new Map();
+        entries.forEach(({ key, value }) => {
+          const day = String(value?.date || key.slice("attendance-".length, "attendance-".length + 10));
+          const bucket = byDay.get(day) || { present: 0, total: 0 };
+          (Array.isArray(value?.records) ? value.records : []).forEach((record) => {
+            bucket.total += 1;
+            if (record.status === "Joogto") bucket.present += 1;
+          });
+          byDay.set(day, bucket);
+        });
+        setAttendanceTrend([...byDay.entries()]
+          .filter(([, v]) => v.total > 0)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .slice(-7)
+          .map(([day, v]) => ({ day, pct: Math.round((v.present / v.total) * 100), present: v.present, total: v.total })));
+      } catch (e) {
+        console.error("Dashboard attendance trend error:", e);
+        setAttendanceTrend([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -3713,7 +4053,40 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
     ? Math.round(progressScores.reduce((sum, r) => sum + Number(r.score || 0), 0) / progressScores.length)
     : null;
   const attendancePct = attendance.total ? Math.round((attendance.present / attendance.total) * 100) : null;
-  const payrollTotal = data.payroll.reduce((sum, p) => sum + Number(p.amount || p.salary || 0), 0);
+  // Payroll records store the final amount in netSalary (older/other shapes: amount, salary).
+  const payAmount = (p) => Number(p.netSalary ?? p.amount ?? p.salary ?? 0) || 0;
+  const thisMonthKey = today.slice(0, 7);
+  const payrollMonth = data.payroll.filter((p) => p.month === thisMonthKey);
+  const payrollTotal = payrollMonth.reduce((sum, p) => sum + payAmount(p), 0);
+  const payrollPaid = payrollMonth.filter((p) => p.status === "La bixiyay").reduce((sum, p) => sum + payAmount(p), 0);
+  const payrollPending = Math.max(0, payrollTotal - payrollPaid);
+  const payrollPaidPct = payrollTotal ? Math.round((payrollPaid / payrollTotal) * 100) : 0;
+
+  // Student growth: cumulative number of students at the end of each of the last 12 months
+  // (students without a creation date count as "already enrolled" at the start).
+  const growthSeries = (() => {
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date();
+      d.setDate(1);
+      d.setMonth(d.getMonth() - (11 - i));
+      return { key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, label: d.toLocaleDateString("so-SO", { month: "short" }) };
+    });
+    return months.map((m) => ({
+      ...m,
+      value: data.students.filter((s) => !s.createdAt || String(s.createdAt).slice(0, 7) <= m.key).length,
+    }));
+  })();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const quranRecent = data.quran.filter((r) => String(r.date || "") >= monthAgo);
+  const quranByType = Object.entries(quranRecent.reduce((acc, r) => {
+    const t = r.type || "Kale";
+    acc[t] = (acc[t] || 0) + 1;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
+  const quranTopStudents = Object.entries(quranRecent.reduce((acc, r) => {
+    if (r.studentName) acc[r.studentName] = (acc[r.studentName] || 0) + 1;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3);
 
   const quick = NAV.filter((n) => n.id !== "home" && canAccess(currentRole, n.id));
   const cards = [
@@ -3832,9 +4205,125 @@ function HomeScreen({ config, goTo, currentRole, tr }) {
           </div>
           <div className="grid grid-cols-2 gap-3 mt-6">
             <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Ardayda Qur’aanka</p><p className="text-xl font-bold mt-1">{quranStudents}</p></div>
-            {canAccess(currentRole, "payroll") && <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Mushahar la diiwaangeliyay</p><p className="text-sm font-bold mt-2">{fmtMoney(payrollTotal, config.currency)}</p></div>}
+            {canAccess(currentRole, "payroll") && <div className="rounded-xl p-3" style={{ backgroundColor: "rgba(255,255,255,0.08)" }}><p className="text-xs">Mushaharka bishan</p><p className="text-sm font-bold mt-2">{fmtMoney(payrollTotal, config.currency)}</p></div>}
           </div>
         </section>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-5 mb-6">
+        {canAccess(currentRole, "students") && (
+          <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }} aria-label="Korodhka ardayda">
+            <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Ardayda</p>
+            <h2 className="text-lg font-semibold mt-1 mb-3" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Korodhka ardayda — 12 bilood</h2>
+            {data.students.length === 0 ? (
+              <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Weli arday lama diiwaangelin.</p>
+            ) : (() => {
+              const W = 320, H = 130, pad = 18;
+              const max = Math.max(...growthSeries.map((g) => g.value), 1);
+              const min = Math.min(...growthSeries.map((g) => g.value));
+              const span = Math.max(max - min, 1);
+              const pts = growthSeries.map((g, i) => [pad + (i * (W - pad * 2)) / (growthSeries.length - 1), H - pad - ((g.value - min) / span) * (H - pad * 2)]);
+              const line = pts.map((p) => p.join(",")).join(" ");
+              const area = `${pad},${H - pad} ${line} ${W - pad},${H - pad}`;
+              return (
+                <>
+                  <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Ardayda: ${growthSeries[0].value} ilaa ${growthSeries[growthSeries.length - 1].value}`}>
+                    <polygon points={area} fill={COLORS.teal} opacity="0.12" />
+                    <polyline points={line} fill="none" stroke={COLORS.teal} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+                    {pts.map((p, i) => <circle key={growthSeries[i].key} cx={p[0]} cy={p[1]} r={i === pts.length - 1 ? 4 : 2.5} fill={i === pts.length - 1 ? COLORS.gold : COLORS.teal} />)}
+                  </svg>
+                  <div className="flex justify-between text-[10px] mt-1" style={{ color: COLORS.inkSoft }}>
+                    <span>{growthSeries[0].label}</span><span>{growthSeries[5].label}</span><span>{growthSeries[11].label}</span>
+                  </div>
+                  <p className="text-sm mt-3" style={{ color: COLORS.ink }}>
+                    Hadda: <strong>{growthSeries[11].value}</strong> arday
+                    {growthSeries[11].value - growthSeries[0].value > 0 && <span style={{ color: COLORS.tealLight }}> · +{growthSeries[11].value - growthSeries[0].value} sannadkan</span>}
+                  </p>
+                </>
+              );
+            })()}
+          </section>
+        )}
+
+        {canAccess(currentRole, "attendance") && (
+          <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }} aria-label="Horumarka xaadirinta">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Xaadirin</p>
+                <h2 className="text-lg font-semibold mt-1 mb-3" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Horumarka xaadirinta</h2>
+              </div>
+              <button onClick={() => goTo("attendance")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Xaadirinta</button>
+            </div>
+            {attendanceTrend.length === 0 ? (
+              <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Bishan weli xaadirin lama qaadin.</p>
+            ) : (
+              <div className="h-36 flex items-end gap-2">
+                {attendanceTrend.map((d) => (
+                  <div key={d.day} className="flex-1 h-full flex flex-col justify-end items-center gap-1" title={`${d.day}: ${d.present}/${d.total}`}>
+                    <span className="text-[10px] font-semibold" style={{ color: COLORS.inkSoft }}>{d.pct}%</span>
+                    <div className="w-full rounded-t-lg" style={{ height: `${Math.max(6, d.pct)}%`, maxHeight: 90, backgroundColor: d.pct >= 80 ? COLORS.teal : d.pct >= 60 ? COLORS.gold : COLORS.brick }} />
+                    <span className="text-[10px]" style={{ color: COLORS.inkSoft }}>{d.day.slice(8)}/{d.day.slice(5, 7)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {canAccess(currentRole, "quran") && (
+          <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }} aria-label="Horumarka Qur'aanka">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Qur’aan</p>
+                <h2 className="text-lg font-semibold mt-1 mb-3" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Horumarka Qur’aanka — 30 maalin</h2>
+              </div>
+              <button onClick={() => goTo("quran")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Qur’aan</button>
+            </div>
+            {quranRecent.length === 0 ? (
+              <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>30-kii maalin ee la soo dhaafay diiwaan Qur’aan lama gelin.</p>
+            ) : (
+              <>
+                <div className="space-y-3">
+                  {quranByType.slice(0, 4).map(([type, count]) => (
+                    <div key={type}>
+                      <div className="flex justify-between text-xs mb-1" style={{ color: COLORS.ink }}><span>{type}</span><span>{count}</span></div>
+                      <div className="h-2 rounded-full" style={{ backgroundColor: COLORS.sand }}><div className="h-2 rounded-full" style={{ width: `${Math.round((count / quranRecent.length) * 100)}%`, backgroundColor: COLORS.teal }} /></div>
+                    </div>
+                  ))}
+                </div>
+                {quranTopStudents.length > 0 && (
+                  <p className="text-xs mt-4" style={{ color: COLORS.inkSoft }}>Ardayda ugu firfircoon: {quranTopStudents.map(([name, n]) => `${name} (${n})`).join(" · ")}</p>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+        {canAccess(currentRole, "payroll") && (
+          <section className="rounded-2xl p-5" style={{ backgroundColor: "#fff", border: `1px solid ${COLORS.line}` }} aria-label="Dulmarka mushaharka">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: COLORS.gold }}>Mushaharka</p>
+                <h2 className="text-lg font-semibold mt-1 mb-3" style={{ color: COLORS.ink, fontFamily: DISPLAY_FONT }}>Dulmarka mushaharka bishan</h2>
+              </div>
+              <button onClick={() => goTo("payroll")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Mushaharka</button>
+            </div>
+            {payrollMonth.length === 0 ? (
+              <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Bishan mushahar lama diiwaangelin.</p>
+            ) : (
+              <>
+                <div className="h-3 rounded-full overflow-hidden flex" style={{ backgroundColor: COLORS.goldSoft }} role="img" aria-label={`${payrollPaidPct}% la bixiyay`}>
+                  <div style={{ width: `${payrollPaidPct}%`, backgroundColor: COLORS.teal }} />
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-4 text-center">
+                  <div className="rounded-xl p-2" style={{ backgroundColor: COLORS.sand }}><p className="text-[11px]" style={{ color: COLORS.inkSoft }}>Wadarta</p><p className="text-sm font-bold mt-1">{fmtMoney(payrollTotal, config.currency)}</p></div>
+                  <div className="rounded-xl p-2" style={{ backgroundColor: "#E4F1E8" }}><p className="text-[11px]" style={{ color: "#28633B" }}>La bixiyay</p><p className="text-sm font-bold mt-1">{fmtMoney(payrollPaid, config.currency)}</p></div>
+                  <div className="rounded-xl p-2" style={{ backgroundColor: COLORS.goldSoft }}><p className="text-[11px]" style={{ color: COLORS.tealDeep }}>La sugayo</p><p className="text-sm font-bold mt-1">{fmtMoney(payrollPending, config.currency)}</p></div>
+                </div>
+              </>
+            )}
+          </section>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-5 mb-8">
@@ -3913,16 +4402,16 @@ function ProgressScreen() {
     });
   }, []);
 
-  const persistSubjects = async (next) => { setSubjects(next); await saveArr("subjects-data", next); };
-  const persistRecords = async (next) => { setRecords(next); await saveArr("academic-progress-data", next); };
+  const persistSubjects = (next) => persistList("subjects-data", next, setSubjects);
+  const persistRecords = (next) => persistList("academic-progress-data", next, setRecords);
 
   const addSubject = async (e) => {
     e.preventDefault();
     if (!subjectForm.name.trim()) return;
     setSaving(true);
     const item = { id: Date.now(), name: subjectForm.name.trim(), teacher: subjectForm.teacher.trim(), className: subjectForm.className.trim(), createdAt: new Date().toISOString() };
-    await persistSubjects([item, ...subjects]);
-    setSubjectForm({ name: "", teacher: "", className: "" });
+    const savedSubject = await persistSubjects([item, ...subjects]);
+    if (savedSubject) setSubjectForm({ name: "", teacher: "", className: "" });
     setSaving(false);
   };
 
@@ -3935,9 +4424,10 @@ function ProgressScreen() {
     if (rawScore !== "" && (Number.isNaN(rawScore) || rawScore < 0 || rawScore > 100)) return;
     setSaving(true);
     const item = { ...progressForm, id: Date.now(), score: rawScore, createdAt: new Date().toISOString() };
-    await persistRecords([item, ...records]);
-    setProgressForm({ studentName: "", subject: "", term: "Semester 1", score: "", date: todayISO(), teacher: "", note: "" });
+    const savedProgress = await persistRecords([item, ...records]);
     setSaving(false);
+    if (!savedProgress) return;
+    setProgressForm({ studentName: "", subject: "", term: "Semester 1", score: "", date: todayISO(), teacher: "", note: "" });
     setTab("progress");
   };
 
@@ -4030,14 +4520,8 @@ function ExamsScreen() {
     });
   }, []);
 
-  const persistExams = async (next) => {
-    setExams(next);
-    await saveArr("exams-data", next);
-  };
-  const persistResults = async (next) => {
-    setResults(next);
-    await saveArr("exam-results-data", next);
-  };
+  const persistExams = (next) => persistList("exams-data", next, setExams);
+  const persistResults = (next) => persistList("exam-results-data", next, setResults);
 
   const addExam = async (e) => {
     e.preventDefault();
@@ -4056,14 +4540,15 @@ function ExamsScreen() {
       maxScore: max,
       createdAt: new Date().toISOString(),
     };
-    await persistExams([item, ...exams]);
-    setExamForm({ name: "", subject: "", className: "", date: todayISO(), time: "", room: "", maxScore: "100" });
+    const savedExam = await persistExams([item, ...exams]);
     setSaving(false);
+    if (!savedExam) return;
+    setExamForm({ name: "", subject: "", className: "", date: todayISO(), time: "", room: "", maxScore: "100" });
     setTab("exams");
   };
 
   const deleteExam = async (id) => {
-    await persistExams(exams.filter((e) => e.id !== id));
+    if (!(await persistExams(exams.filter((e) => e.id !== id)))) return;
     await persistResults(results.filter((r) => r.examId !== id));
     if (resultForm.examId === String(id)) setResultForm((p) => ({ ...p, examId: "" }));
   };
@@ -4078,9 +4563,10 @@ function ExamsScreen() {
     const existing = results.find((r) => String(r.examId) === String(exam.id) && sameText(r.studentName, resultForm.studentName));
     const item = { id: existing?.id || Date.now(), examId: exam.id, studentName: resultForm.studentName, score, note: resultForm.note.trim(), updatedAt: new Date().toISOString() };
     const next = existing ? results.map((r) => (r.id === existing.id ? item : r)) : [item, ...results];
-    await persistResults(next);
-    setResultForm({ examId: String(exam.id), studentName: "", score: "", note: "" });
+    const savedResult = await persistResults(next);
     setSaving(false);
+    if (!savedResult) return;
+    setResultForm({ examId: String(exam.id), studentName: "", score: "", note: "" });
   };
 
   const grade = (score, max) => {
@@ -4207,10 +4693,7 @@ function QuranScreen() {
     return () => { active = false; };
   }, []);
 
-  const persist = async (next) => {
-    await saveArr("quran-progress-data", next);
-    setRecords(next);
-  };
+  const persist = (next) => persistList("quran-progress-data", next, setRecords);
 
   const chooseStudent = (name) => {
     setSelectedStudent(name);
@@ -4229,18 +4712,20 @@ function QuranScreen() {
     setSaving(true);
     try {
       const payload = { ...form, studentName, rating: form.rating || "Wanaagsan" };
+      let savedRecord;
       if (editingId !== null) {
-        await persist(records.map((r) => String(r.id) === String(editingId) ? { ...r, ...payload, id: r.id } : r));
+        savedRecord = await persist(records.map((r) => String(r.id) === String(editingId) ? { ...r, ...payload, id: r.id } : r));
       } else {
         const item = { ...payload, id: Date.now(), createdAt: new Date().toISOString() };
-        await persist([item, ...records]);
+        savedRecord = await persist([item, ...records]);
       }
+      if (!savedRecord) return; // keep the form content
       setSelectedStudent(studentName);
       setForm({ studentName, type: "Xifdhi Cusub", surah: "", fromAyah: "", toAyah: "", date: todayISO(), note: "", rating: "Wanaagsan" });
       setEditingId(null);
     } catch (err) {
       console.error("Quran record save failed:", err);
-      alert("Diiwaangelinta way fashilantay. Fadlan mar kale isku day.");
+      notify("Diiwaangelinta way fashilantay. Fadlan mar kale isku day.", "error");
     } finally {
       setSaving(false);
     }
@@ -4258,7 +4743,7 @@ function QuranScreen() {
       await persist(records.filter((r) => String(r.id) !== String(id)));
     } catch (err) {
       console.error("Quran record delete failed:", err);
-      alert("Diiwaanka lama tirtiri karin. Mar kale isku day.");
+      notify("Diiwaanka lama tirtiri karin. Mar kale isku day.", "error");
     }
     setConfirmDeleteId(null);
   };
@@ -4789,10 +5274,11 @@ function ScheduleScreen() {
   }, []);
 
   const persist = async (next) => {
-    setItems(next);
-    await saveArr(scheduleKey, next);
+    const ok = await persistList(scheduleKey, next, setItems);
+    if (!ok) return false;
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
+    return true;
   };
 
   const resetForm = () => {
@@ -4817,7 +5303,7 @@ function ScheduleScreen() {
       ? items.map((it) => it.id === editingId ? { ...it, ...record, updatedAt: new Date().toISOString() } : it)
       : [{ id: crypto.randomUUID(), ...record, createdAt: new Date().toISOString() }, ...items];
 
-    await persist(next);
+    if (!(await persist(next))) return;
     resetForm();
   };
 
@@ -4838,7 +5324,7 @@ function ScheduleScreen() {
 
   const removeItem = async (id) => {
     if (!(await askConfirm("Ma hubtaa inaad ka saarto casharkan jadwalka?", { confirmLabel: "Ka saar", danger: true }))) return;
-    await persist(items.filter((it) => it.id !== id));
+    if (!(await persist(items.filter((it) => it.id !== id)))) return;
     if (editingId === id) resetForm();
   };
 
@@ -5086,10 +5572,11 @@ function DailyScheduleScreen() {
   }, []);
 
   const persistTasks = async (next) => {
-    setTasks(next);
-    await saveArr("daily-tasks-data", next);
+    const ok = await persistList("daily-tasks-data", next, setTasks);
+    if (!ok) return false;
     setSaved(true);
     setTimeout(() => setSaved(false), 1600);
+    return true;
   };
 
   const addTask = async (e) => {
@@ -5103,8 +5590,7 @@ function DailyScheduleScreen() {
       done: false,
       createdAt: new Date().toISOString(),
     }, ...tasks];
-    await persistTasks(next);
-    setTaskText("");
+    if (await persistTasks(next)) setTaskText("");
   };
 
   const toggleTask = async (id) => {
@@ -5210,8 +5696,12 @@ function ExcelScreen() {
     setMessage("");
     setBusy(true);
     try {
-      const data = await loadArr(key);
-      const rows = Array.isArray(data) ? data.map(mapper) : [];
+      const res = await loadArrSafe(key);
+      if (!res.ok) {
+        setError("Xogta lama akhrin karin (isku xirka), sidaas darteed export lama samayn. Mar kale isku day.");
+        return;
+      }
+      const rows = Array.isArray(res.data) ? res.data.map(mapper) : [];
       if (!rows.length) {
         setError("Xogta la doortay weli ma jirto.");
         return;
@@ -5231,10 +5721,13 @@ function ExcelScreen() {
     setMessage("");
     setBusy(true);
     try {
-      const keys = await listKeys("attendance-");
+      const { rows: attRows, failed: attFailed } = await loadAttendanceRows("attendance-");
+      if (attFailed) {
+        setError(`Export-ka waa la joojiyey: ${attFailed} diiwaan xaadirin lama akhrin karin, faylku wuu ka dhiman lahaa.`);
+        return;
+      }
       const all = [];
-      for (const key of keys) {
-        const rec = await loadObj(key, null);
+      for (const rec of attRows) {
         if (!rec?.records) continue;
         rec.records.forEach((r) => all.push({
           date: rec.date || "",
@@ -5304,8 +5797,13 @@ function ExcelScreen() {
     setError("");
     setMessage("");
     try {
-      const existing = await loadArr("students-data");
-      const list = Array.isArray(existing) ? existing : [];
+      // Fail closed: if the current student list cannot be read, nothing is written.
+      const current = await loadArrSafe("students-data");
+      if (!current.ok || !Array.isArray(current.data)) {
+        setError("Liiska ardayda hadda jira lama akhrin karin, sidaas darteed import-ka waa la joojiyey. Xogtii hore waa ammaan. Hubi internet-ka kadibna mar kale isku day.");
+        return;
+      }
+      const list = current.data;
       let added = 0;
       let updated = 0;
       const next = [...list];
@@ -5329,7 +5827,11 @@ function ExcelScreen() {
         }
       });
 
-      await saveArr("students-data", next);
+      const importSaved = await saveArr("students-data", next, { silent: true });
+      if (!importSaved) {
+        setError("Import-ka lama kaydin; xogtii hore waa ammaan oo waxba lama beddelin. Dib u fur bogga kadibna mar kale isku day.");
+        return;
+      }
       setImportRows([]);
       setImportName("");
       setMessage(`Import waa guuleystay: ${added} cusub, ${updated} la cusboonaysiiyey.`);
@@ -5442,16 +5944,17 @@ function AchievementsScreen() {
     });
   }, []);
 
-  const persistAchievements = async (next) => { setAchievements(next); await saveArr("achievements-data", next); };
+  const persistAchievements = (next) => persistList("achievements-data", next, setAchievements);
 
   const addAchievement = async (e) => {
     e.preventDefault();
     if (!form.studentName.trim() || !form.title.trim()) return;
     setSaving(true);
     const item = { id: Date.now(), studentName: form.studentName.trim(), title: form.title.trim(), type: form.type, date: form.date, note: form.note.trim(), createdAt: new Date().toISOString() };
-    await persistAchievements([item, ...achievements]);
-    setForm({ studentName: "", title: "", type: "Shahaado", date: todayISO(), note: "" });
+    const savedAch = await persistAchievements([item, ...achievements]);
     setSaving(false);
+    if (!savedAch) return;
+    setForm({ studentName: "", title: "", type: "Shahaado", date: todayISO(), note: "" });
     setTab("achievements");
   };
 
@@ -5748,126 +6251,130 @@ useEffect(() => {
   };
 }, []);
 
-useEffect(() => {
-  let alive = true;
-  if (!session?.user?.id) {
+const userId = session?.user?.id || null;
+  const sessionRef = React.useRef(session);
+  sessionRef.current = session;
+  const [verifyNonce, setVerifyNonce] = useState(0);
+  const [tenantErrorKind, setTenantErrorKind] = useState("");
+  const [tenantNote, setTenantNote] = useState("");
+  const [roleError, setRoleError] = useState("");
+  const [roleNonce, setRoleNonce] = useState(0);
+
+  // Tenant verification is keyed on the USER ID, not the session object. A token refresh or a
+  // tab returning to the foreground produces a new session object for the same user; that must
+  // not tear the app down and re-verify, otherwise open forms are rebuilt and unsaved input is lost.
+  useEffect(() => {
+    let alive = true;
+    if (!userId) {
+      setTenantReady(false);
+      setRoleLoading(true);
+      setCurrentRole(null);
+      setTenantError("");
+      setTenantErrorKind("");
+      setTenantNote("");
+      setRoleError("");
+      setStorageTenant(null);
+      setStorageBranch("main");
+      resetStorageSync();
+      resetStorageSync();
+      return () => { alive = false; };
+    }
+
     setTenantReady(false);
     setRoleLoading(true);
     setCurrentRole(null);
     setTenantError("");
-    setStorageTenant(null);
+    setTenantErrorKind("");
+    (async () => {
+      const MAX_AUTO_RETRIES = 5;
+      let attempt = 0;
+      while (alive) {
+        const result = await verifyTenantOnce(sessionRef.current?.user || { id: userId });
+        if (!alive) return;
+        if (result.ok) {
+          setStorageTenant(result.tenant);
+          setTenantNote("");
+          setTenantReady(true);
+          return;
+        }
+        if ((result.kind === "transient" || result.kind === "auth") && attempt < MAX_AUTO_RETRIES) {
+          attempt += 1;
+          if (result.kind === "auth") {
+            try { await supabase.auth.getSession(); } catch (e) { console.warn("Session refresh failed:", e); }
+          }
+          setTenantNote(`Isku xirka waa daciif yahay. Dib ayaa loo isku dayayaa (${attempt}/${MAX_AUTO_RETRIES})...`);
+          await wait(Math.min(1000 * 2 ** attempt, 15000));
+          continue;
+        }
+        setTenantNote("");
+        setTenantErrorKind(result.kind === "auth" ? "transient" : result.kind);
+        setTenantError(result.message);
+        return;
+      }
+    })();
+
     return () => { alive = false; };
-  }
+  }, [userId, verifyNonce]);
 
-  setTenantReady(false);
-  setRoleLoading(true);
-  setCurrentRole(null);
-  setTenantError("");
-  (async () => {
-    // Existing members keep their current tenant. New public signups carry the
-    // school name in Auth metadata and must register a tenant before bootstrap.
-    const requestedSchoolName = String(
-      session.user.user_metadata?.nibraas_school_name || ""
-    ).trim();
+  // When the phone comes back online or the app returns to the foreground after a failed check,
+  // try again automatically. A real "denied"/"setup" answer is never retried automatically.
+  useEffect(() => {
+    if (!userId || tenantErrorKind !== "transient") return undefined;
+    const retry = () => {
+      if (document.visibilityState === "hidden") return;
+      setVerifyNonce((n) => n + 1);
+    };
+    window.addEventListener("online", retry);
+    document.addEventListener("visibilitychange", retry);
+    return () => {
+      window.removeEventListener("online", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [userId, tenantErrorKind]);
 
-    const { data: memberships, error: membershipError } = await supabase
-      .from("nibraas_memberships")
-      .select("tenant_id")
-      .eq("user_id", session.user.id)
-      .limit(1);
-
-    if (!alive) return;
-    if (membershipError) {
-      console.error("Membership check error:", membershipError);
-      setTenantError("Xubinimada akoonka lama xaqiijin. Fadlan dib u gal.");
-      return;
-    }
-
-    if (Array.isArray(memberships) && memberships.length > 0) {
-      const { data, error } = await supabase.rpc("nibraas_bootstrap");
-      if (!alive) return;
-      if (error || !data) {
-        console.error("Tenant bootstrap error:", error);
-        setTenantError(error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
-        return;
-      }
-      setStorageTenant(data);
-      setTenantReady(true);
-      return;
-    }
-
-    if (requestedSchoolName) {
-      const { data, error } = await supabase.rpc("nibraas_register_tenant", {
-        p_name: requestedSchoolName.slice(0, 120),
-      });
-      if (!alive) return;
-      if (error || !data) {
-        console.error("Tenant registration error:", error);
-        setTenantError(error?.message || "Madrasadda cusub lama abuuri karin.");
-        return;
-      }
-      setStorageTenant(data);
-      setTenantReady(true);
-      return;
-    }
-
-    // Legacy first account flow remains unchanged for accounts without signup metadata.
-    const { data, error } = await supabase.rpc("nibraas_bootstrap");
-    if (!alive) return;
-    if (error || !data) {
-      console.error("Tenant bootstrap error:", error);
-      setTenantError(error?.message || "Tenant-ka NIBRAAS lama diyaarin.");
-      return;
-    }
-    setStorageTenant(data);
-    setTenantReady(true);
-  })();
-
-  return () => { alive = false; };
-}, [session]);
-
-useEffect(() => {
-  if (!session?.user?.id || !tenantReady) return;
-
-  // Role-ka si toos ah uga akhri memberships-ka user-kan.
-  // Tani waxay ka badbaado badan tahay in role-ka laga qiyaaso user-profiles.
-  supabase
-    .from("nibraas_memberships")
-    .select("tenant_id, role")
-    .eq("user_id", session.user.id)
-    .eq("tenant_id", CURRENT_TENANT_ID)
-    .maybeSingle()
-    .then(({ data, error }) => {
-      if (error) {
-        console.error("Role load error:", error);
-        setCurrentRole(null);
+  useEffect(() => {
+    if (!userId || !tenantReady) return undefined;
+    let alive = true;
+    setRoleError("");
+    (async () => {
+      for (let attempt = 0; alive && attempt < 4; attempt++) {
+        // Role is read straight from memberships; authorization never comes from user-profiles.
+        const { data, error } = await supabase
+          .from("nibraas_memberships")
+          .select("tenant_id, role")
+          .eq("user_id", userId)
+          .eq("tenant_id", CURRENT_TENANT_ID)
+          .maybeSingle();
+        if (!alive) return;
+        if (error) {
+          console.error("Role load error:", error);
+          if (classifyTenantError(error) === "denied") {
+            setRoleError("Doorkaaga lama akhrin karin.");
+            setRoleLoading(false);
+            return;
+          }
+          await wait(Math.min(1000 * 2 ** (attempt + 1), 8000));
+          continue;
+        }
+        const role = data?.role;
+        if (!USER_ROLES.includes(role)) {
+          console.error("Invalid or missing NIBRAAS role:", role);
+          setRoleError("Akoonkan door ma laha madrasaddan. La xiriir Admin-ka madrasadda.");
+          setCurrentRole(null);
+          setRoleLoading(false);
+          return;
+        }
+        setCurrentRole(role);
         setRoleLoading(false);
         return;
       }
-
-      const role = data?.role;
-      if (!USER_ROLES.includes(role)) {
-        console.error("Invalid or missing NIBRAAS role:", role);
-        setCurrentRole(null);
+      if (alive) {
+        setRoleError("Doorkaaga lama akhrin karin (isku xirka). Mar kale isku day.");
         setRoleLoading(false);
-        return;
       }
-
-      setCurrentRole(role);
-      setRoleLoading(false);
-    });
-}, [session, tenantReady]);
-
-useEffect(() => {
-  if (!session?.user?.id || !tenantReady) return;
-
-  loadArr("user-profiles").then((profiles) => {
-    const profile = Array.isArray(profiles)
-      ? profiles.find((u) => u.authUserId === session.user.id || u.email?.toLowerCase() === session.user.email?.toLowerCase())
-      : null;
-    // Display profile metadata only; authorization comes from nibraas_memberships.
-  });
-}, [session, tenantReady]);
+    })();
+    return () => { alive = false; };
+  }, [userId, tenantReady, roleNonce]);
 // NOTE (v43): App-level students/finance state and the auto-save effects were removed.
 // Each screen (Ardayda, Maaliyadda...) loads and saves its own data. The old App-level copy was
 // never updated by those screens, but it was written back to the database whenever the auth session
@@ -5938,20 +6445,19 @@ useEffect(() => {
 
   const [active, setActive] = useState("home");
   const [language, setLanguage] = useState(() => localStorage.getItem("nibraas-language") || "so");
-  const [branches, setBranches] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("nibraas-branches") || "null");
-      return Array.isArray(saved) && saved.length ? saved : [{ id: "main", name: "Laanta 1" }];
-    } catch {
-      return [{ id: "main", name: "Laanta 1" }];
-    }
-  });
-  const [activeBranchId, setActiveBranchId] = useState(() => localStorage.getItem("nibraas-active-branch") || "main");
+  const DEFAULT_BRANCHES = [{ id: "main", name: "Laanta 1" }];
+  // Branch list and active branch are NOT read from global localStorage keys any more: they come
+  // from this tenant's own `branches-data` row, and the remembered selection is scoped per tenant.
+  const [branches, setBranches] = useState(DEFAULT_BRANCHES);
+  const [activeBranchId, setActiveBranchId] = useState("main");
   const [showBranchManager, setShowBranchManager] = useState(false);
   const [branchesLoaded, setBranchesLoaded] = useState(false);
-  const [mobileTip, setMobileTip] = useState(() => localStorage.getItem("nibraas-mobile-tip") !== "hidden");
+  const [branchesError, setBranchesError] = useState("");
+  const [branchNonce, setBranchNonce] = useState(0);
+  const savedBranchesRef = React.useRef("");
+  const [mobileTip, setMobileTip] = useState(() => { try { return localStorage.getItem("nibraas-mobile-tip") !== "hidden"; } catch { return true; } });
   const dismissMobileTip = () => {
-    localStorage.setItem("nibraas-mobile-tip", "hidden");
+    try { localStorage.setItem("nibraas-mobile-tip", "hidden"); } catch (e) { console.warn("localStorage write failed:", e); }
     setMobileTip(false);
   };
 
@@ -5961,36 +6467,68 @@ useEffect(() => {
     if (!nextId) return;
     setStorageBranch(nextId);
     setActiveBranchId(nextId);
+    writeTenantLocal("nibraas-active-branch", nextId);
   };
 
   useEffect(() => {
-    localStorage.setItem("nibraas-branches", JSON.stringify(branches));
-  }, [branches]);
-
-  useEffect(() => {
-    localStorage.setItem("nibraas-active-branch", activeBranchId);
-    setStorageBranch(activeBranchId);
-  }, [activeBranchId]);
-
-  useEffect(() => {
-    if (!tenantReady) return;
+    if (!tenantReady) {
+      setBranchesLoaded(false);
+      setBranchesError("");
+      setBranches(DEFAULT_BRANCHES);
+      setActiveBranchId("main");
+      savedBranchesRef.current = "";
+      return undefined;
+    }
+    let alive = true;
     setBranchesLoaded(false);
-    loadArr("branches-data").then((saved) => {
-      if (Array.isArray(saved) && saved.length) {
-        setBranches(saved);
-        const savedActive = localStorage.getItem("nibraas-active-branch");
-        const nextActive = savedActive && saved.some((b) => b.id === savedActive)
-          ? savedActive
-          : saved[0].id;
-        setStorageBranch(nextActive);
-        setActiveBranchId(nextActive);
+    setBranchesError("");
+    (async () => {
+      let res = null;
+      for (let attempt = 0; alive && attempt < 4; attempt++) {
+        res = await loadArrSafe("branches-data");
+        if (!alive) return;
+        if (res.ok) break;
+        await wait(Math.min(1000 * 2 ** (attempt + 1), 8000));
       }
+      if (!alive) return;
+      if (!res || !res.ok) {
+        // Fail closed: without the real branch list the app must not guess a branch.
+        setBranchesError("Liiska laamaha lama akhrin karin. Hubi internet-ka kadibna mar kale isku day.");
+        return;
+      }
+      const list = Array.isArray(res.data) && res.data.length ? res.data : DEFAULT_BRANCHES;
+      let legacy = null;
+      try { legacy = localStorage.getItem("nibraas-active-branch"); } catch (e) { console.warn("localStorage read failed:", e); }
+      const remembered = readTenantLocal("nibraas-active-branch");
+      // A remembered/legacy id is only trusted if it exists in THIS tenant's branch list.
+      const next = [remembered, legacy].find((id) => id && list.some((b) => b.id === id)) || list[0].id;
+      savedBranchesRef.current = JSON.stringify(list);
+      setStorageBranch(next);
+      setBranches(list);
+      setActiveBranchId(next);
+      writeTenantLocal("nibraas-active-branch", next);
       setBranchesLoaded(true);
-    });
-  }, [tenantReady]);
+    })();
+    return () => { alive = false; };
+  }, [tenantReady, branchNonce]);
 
+  // Persist only real changes, merging with what is stored so another device's new branch is kept.
   useEffect(() => {
-    if (tenantReady && branchesLoaded && branches.length) saveArr("branches-data", branches);
+    if (!tenantReady || !branchesLoaded || !branches.length) return;
+    if (JSON.stringify(branches) === savedBranchesRef.current) return;
+    let alive = true;
+    (async () => {
+      const fresh = await loadArrSafe("branches-data");
+      if (!alive) return;
+      if (!fresh.ok) { notify("Laanta cusub lama kaydin karin (isku xirka). Mar kale isku day.", "error"); return; }
+      const stored = Array.isArray(fresh.data) ? fresh.data : [];
+      const merged = [...stored, ...branches.filter((b) => !stored.some((x) => x.id === b.id))];
+      const ok = await saveArr("branches-data", merged);
+      if (!alive) return;
+      if (!ok) { notify("Laanta cusub lama kaydin.", "error"); return; }
+      savedBranchesRef.current = JSON.stringify(branches);
+    })();
+    return () => { alive = false; };
   }, [branches, tenantReady, branchesLoaded]);
 
   const activeBranch = branches.find((b) => b.id === activeBranchId) || branches[0];
@@ -6124,6 +6662,7 @@ useEffect(() => {
     return null;
   };
 
+  const canManageBranches = ["Admin", "Maamule"].includes(currentRole);
   const visibleNav = NAV.filter((n) => canAccess(currentRole, n.id));
   const moreItems = visibleNav.filter((n) => !PRIMARY_TABS.includes(n.id) && n.id !== "home");
 
@@ -6148,18 +6687,36 @@ useEffect(() => {
     return <LoginScreen />;
   }
 
-  if (!tenantReady || roleLoading || !currentRole) {
+  if (!tenantReady || roleLoading || !currentRole || !branchesLoaded) {
+    const problem = tenantError || roleError || branchesError;
+    const kind = tenantError ? tenantErrorKind : "transient";
+    const retry = () => {
+      if (tenantError) setVerifyNonce((n) => n + 1);
+      else if (roleError) { setRoleLoading(true); setRoleNonce((n) => n + 1); }
+      else setBranchNonce((n) => n + 1);
+    };
     return (
       <div className="min-h-screen flex items-center justify-center px-5" style={{ backgroundColor: COLORS.sand, fontFamily: BODY_FONT }}>
-        <div className="max-w-md w-full rounded-2xl border p-6 text-center" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
-          {tenantError ? (
+        <div className="max-w-md w-full rounded-2xl border p-6 text-center" role="status" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
+          {problem ? (
             <>
-              <p className="font-semibold mb-2" style={{ color: COLORS.brick }}>Amniga NIBRAAS lama diyaarin.</p>
-              <p className="text-sm" style={{ color: COLORS.inkSoft }}>{tenantError}</p>
-              <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>Ku orod SQL-ka v20 ee Supabase, kadibna dib u fur app-ka.</p>
+              <p className="font-semibold mb-2" style={{ color: COLORS.brick }}>
+                {kind === "setup" ? "Supabase-ka weli ma diyaarsana." : kind === "denied" ? "Akoonkan lama xaqiijin karin." : "Isku xirka lama dhammaystirin."}
+              </p>
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>{problem}</p>
+              {kind === "transient" && <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>Xogtaada waa ammaan; wax lama beddelin. Hubi internet-ka kadibna riix "Mar kale isku day".</p>}
+              {kind === "setup" && <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>Function-ka database-ka ma helin. Maamulaha nidaamka ha hubiyo SQL-ka ku jira folder-ka supabase/migrations.</p>}
+              {kind === "denied" && <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>Haddii aad rumaysan tahay inaad xubin tahay, la xiriir Admin-ka madrasadda.</p>}
+              <div className="mt-4 flex gap-2 justify-center">
+                <button type="button" onClick={retry} className="rounded-lg px-4 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>Mar kale isku day</button>
+                <button type="button" onClick={() => supabase.auth.signOut()} className="rounded-lg border px-4 py-2 text-sm font-semibold" style={{ borderColor: COLORS.line, color: COLORS.ink }}>Ka bax</button>
+              </div>
             </>
           ) : (
-            <p className="text-sm font-medium" style={{ color: COLORS.teal }}>NIBRAAS amnigiisa iyo doorkaaga waa la hubinayaa...</p>
+            <>
+              <p className="text-sm font-medium" style={{ color: COLORS.teal }}>NIBRAAS amnigiisa iyo doorkaaga waa la hubinayaa...</p>
+              {tenantNote && <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>{tenantNote}</p>}
+            </>
           )}
         </div>
       </div>
@@ -6207,7 +6764,7 @@ useEffect(() => {
         </nav>
 
         <div className="px-3 pb-5 relative">
-          {showBranchManager && (
+          {canManageBranches && showBranchManager && (
             <div
               className="absolute left-3 right-3 bottom-16 z-50 rounded-xl border p-4 shadow-lg"
               style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}
@@ -6267,14 +6824,14 @@ useEffect(() => {
             >
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
-            <button
+            {canManageBranches && <button
               type="button"
               onClick={() => setShowBranchManager((v) => !v)}
               className="rounded-lg border px-2 py-2 text-sm"
               style={{ borderColor: COLORS.line, color: COLORS.ink, backgroundColor: "#fff", fontFamily: BODY_FONT }}
             >
               {tr.branches}
-            </button>
+            </button>}
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
@@ -6405,8 +6962,8 @@ useEffect(() => {
                   <select value={activeBranchId} onChange={(e) => switchBranch(e.target.value)} aria-label={tr.branch} className="w-full rounded-lg border px-3 py-2.5 text-sm" style={{ borderColor: COLORS.line, color: COLORS.ink, backgroundColor: "#fff" }}>
                     {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
-                  <button type="button" onClick={() => setShowBranchManager((v) => !v)} className="mt-2 text-sm font-semibold" style={{ color: COLORS.teal }}>{tr.branches} · {tr.addBranch}</button>
-                  {showBranchManager && (
+                  {canManageBranches && <button type="button" onClick={() => setShowBranchManager((v) => !v)} className="mt-2 text-sm font-semibold" style={{ color: COLORS.teal }}>{tr.branches} · {tr.addBranch}</button>}
+                  {canManageBranches && showBranchManager && (
                     <div className="mt-2 rounded-lg border p-3 space-y-2" style={{ borderColor: COLORS.line, backgroundColor: "#fff" }}>
                       {branches.map((b) => <div key={b.id} className="flex items-center justify-between text-sm"><span>{b.name}</span><button type="button" onClick={() => switchBranch(b.id)} className="font-semibold" style={{ color: COLORS.teal }}>{activeBranchId === b.id ? "✓" : tr.branch}</button></div>)}
                       <div className="flex gap-2"><input value={newBranchName} onChange={(e) => setNewBranchName(e.target.value)} placeholder={tr.branchName} className="min-w-0 flex-1 rounded-lg border px-2 py-2 text-sm" style={{ borderColor: COLORS.line }} /><button type="button" onClick={() => { const name = newBranchName.trim(); if (!name) return; const id = "branch-" + Date.now(); setBranches((prev) => [...prev, { id, name }]); switchBranch(id); setNewBranchName(""); }} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: COLORS.teal, color: "#fff" }}>+</button></div>
@@ -6445,4 +7002,5 @@ export default function App() {
     </ErrorBoundary>
   );
 }
+
 
