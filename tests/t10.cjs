@@ -1,0 +1,43 @@
+const { chromium } = require("/home/claude/.npm-global/lib/node_modules/playwright");
+const path = require("path");
+const url = "file://" + path.join(__dirname, "index.html");
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log("PASS", m); } else { fail++; console.log("FAIL", m); } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+(async () => {
+  const browser = await chromium.launch();
+  const page = await (await browser.newContext()).newPage();
+  const errs = []; page.on("pageerror", (e) => { errs.push(e.message); console.log("PAGEERROR", e.message); });
+  await page.addInitScript(() => localStorage.setItem("nibraas-language", "ar"));
+  await page.goto(url); await page.waitForFunction(() => window.__mock);
+  await page.evaluate(() => {
+    const M = window.__mock; const now = "2026-11-01T00:00:00Z";
+    const put = (k, v, b = "main") => M.rows.set(`T2:${b}:${k}`, { key: `T2:${b}:${k}`, tenant_id: "T2", branch_id: b, value: v, updated_at: now });
+    M.memberships.push({ tenant_id: "T2", user_id: "u2", role: "Admin" });
+    put("school-profile", { type: "academic", version: 1 }, "__global__");
+    put("students-data", [{ id: 1, name: "Axmed Cali", className: "Fasalka 1" }, { id: 2, name: "Faadumo Nuur", className: "Fasalka 1" }]);
+    put("exams-data", [{ id: 11, name: "Imtixaanka Dhexe", subject: "Xisaab", className: "Fasalka 1", maxScore: 100, date: "2026-11-01" }]);
+    M.emit("SIGNED_IN", M.mkSession("u2", "t"));
+  });
+  await page.waitForSelector("aside nav", { timeout: 10000 });
+  await page.click("aside nav button:has-text('الدرجات والتقديرات')"); await sleep(500);
+  const t = await page.evaluate(() => document.querySelector("main").innerText);
+  ok(/اختر امتحاناً/.test(t), "marks screen text in Arabic");
+  await page.selectOption("main select", { index: 1 }); await sleep(400);
+  const inputs = await page.$$("main input[type=number]");
+  await inputs[0].fill("88"); await inputs[1].fill("51");
+  await page.click("main button:has-text('حفظ')"); await sleep(800);
+  const saved = await page.evaluate(() => window.__mock.rows.get("T2:main:exam-results-data")?.value);
+  ok(saved && saved.length === 2 && saved[0].studentName === "Axmed Cali" && +saved[0].score === 88, "saving in Arabic stores original data: " + JSON.stringify(saved && saved.map((x) => [x.studentName, x.score])));
+  // switch language back and forth while the screen is open; typed values must survive
+  await inputs[0].fill("77");
+  await page.evaluate(() => { const s = [...document.querySelectorAll("select")].find((x) => [...x.options].some((o) => o.value === "en")); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set; set.call(s, "en"); s.dispatchEvent(new Event("change", { bubbles: true })); });
+  await sleep(400);
+  const t2 = await page.evaluate(() => document.querySelector("main").innerText);
+  ok(/Choose an exam/.test(t2), "same screen switches to English");
+  const v = await page.$eval("main input[type=number]", (i) => i.value);
+  ok(v === "77", "typed value survives language switch: " + v);
+  ok(errs.length === 0, "no page errors");
+  console.log(`\n${pass} passed, ${fail} failed`);
+  await browser.close();
+})();
